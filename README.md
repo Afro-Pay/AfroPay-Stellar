@@ -3,6 +3,10 @@
 **AfroPay-Stellar** is a cross-border remittance platform built on the Stellar blockchain.  
 It provides fast, low-cost, and secure global money transfers, with a focus on Africa and Nigeria.
 
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/3ebd4b8d-079f-4cb0-a820-4fc86b8cf0ac" />
+
+
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/29f32b93-b8e8-46c1-bb11-d129f3e60d71" />
 
 
