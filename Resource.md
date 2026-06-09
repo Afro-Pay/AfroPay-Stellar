@@ -1,60 +1,79 @@
-```md
-# Stellar & Soroban Developer Resources
+# Stellar & Soroban Official Resources
 
-## Official Stellar Resources
+## Official Stellar Website
+https://stellar.org
 
-- :contentReference[oaicite:0]{index=0}
-- :contentReference[oaicite:1]{index=1}
-- :contentReference[oaicite:2]{index=2}
-- :contentReference[oaicite:3]{index=3}
+## Stellar Developer Documentation
+https://developers.stellar.org/docs
 
----
+## Stellar Developers Portal
+https://developers.stellar.org
 
-# Wallet & Authentication
+## Soroban Smart Contracts
+https://developers.stellar.org/docs/build/smart-contracts
 
-- :contentReference[oaicite:4]{index=4}
-- :contentReference[oaicite:5]{index=5}
-- :contentReference[oaicite:6]{index=6}
+## Stellar JavaScript SDK
+https://developers.stellar.org/docs/tools/sdks/client-sdks/javascript
 
----
+## Stellar SDKs
+https://developers.stellar.org/docs/tools/sdks
 
-# Soroban & Smart Contracts
+## Stellar Laboratory
+https://laboratory.stellar.org
 
-- :contentReference[oaicite:7]{index=7}
-- :contentReference[oaicite:8]{index=8}
+## Stellar GitHub Organization
+https://github.com/stellar
 
----
+## Stellar Docs GitHub Repository
+https://github.com/stellar/stellar-docs
 
-# SDKs & Tooling
+## Stellar Build Guides
+https://developers.stellar.org/docs/build
 
-- :contentReference[oaicite:9]{index=9}
-- :contentReference[oaicite:10]{index=10}
-- :contentReference[oaicite:11]{index=11}
+## Stellar How-To Guides
+https://developers.stellar.org/docs/build/guides
 
----
+## Stellar Wallet Development
+https://developers.stellar.org/docs/build/apps/overview
 
-# Learning Resources
+## Freighter Wallet Docs
+https://developers.stellar.org/docs/build/guides/freighter
 
-- :contentReference[oaicite:12]{index=12}
-- :contentReference[oaicite:13]{index=13}
-- :contentReference[oaicite:14]{index=14}
+## Stellar RPC Documentation
+https://developers.stellar.org/docs/data/rpc
 
----
+## Stellar Testnet Faucet (Friendbot)
+https://friendbot.stellar.org
 
-# Community
+## Stellar Expert Explorer
+https://stellar.expert
 
-- :contentReference[oaicite:15]{index=15}
-- :contentReference[oaicite:16]{index=16}
-- :contentReference[oaicite:17]{index=17}
+## Stellar Community Discord
+https://discord.gg/stellar
 
----
+## Stellar Stack Exchange
+https://stellar.stackexchange.com
 
-# Deployment & Hosting
+## Stellar Quest
+https://quest.stellar.org
 
-- :contentReference[oaicite:18]{index=18}
-- :contentReference[oaicite:19]{index=19}
-```
+## Soroban Examples
+https://github.com/stellar/soroban-examples
 
-([developers.stellar.org][1])
+## Soroban CLI
+https://developers.stellar.org/docs/tools/cli
 
-[1]: https://developers.stellar.org/docs/build/guides/freighter?utm_source=chatgpt.com "Freighter Wallet | Stellar Docs"
+## Next.js Documentation
+https://nextjs.org/docs
+
+## TailwindCSS Documentation
+https://tailwindcss.com/docs
+
+## ShadCN UI
+https://ui.shadcn.com
+
+## Framer Motion
+https://motion.dev
+
+## Vercel Documentation
+https://vercel.com/docs
