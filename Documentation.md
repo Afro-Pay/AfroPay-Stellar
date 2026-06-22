@@ -204,3 +204,14 @@ Built and maintained as part of the Stellar ecosystem.
 
 ```
 ```
+
+## DevOps & Container Resiliency
+
+### Restart Policies
+All application services utilize the `unless-stopped` restart policy. In the event of an unhandled runtime error, transient infrastructure failure, or container crash, Docker Engine will automatically attempt to reboot the container unless it was explicitly brought down via `docker compose down`.
+
+### Health Checking & Boot Ordering
+Container startup orchestration is verified using explicit healthchecks rather than network binding readiness:
+* **Databases (`postgres`, `redis`)** utilize native CLI commands (`pg_isready` and `redis-cli ping`) to declare deep readiness.
+* **Service Layers (`api`, `frontend`, `fraud-service`)** expose health/routing endpoints validated via `curl`.
+* **Ordering**: Core dependencies utilize advanced `depends_on` rules requiring structural health indicators (`condition: service_healthy`) before booting downstream application layers. This prevents application services from crashing due to early database connection rejections during initial startup sequences.
