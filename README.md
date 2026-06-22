@@ -83,6 +83,8 @@ PostgreSQL + Redis
 - Multi-currency transfers
 - Stellar path payments for currency conversion
 - Real-time FX rates
+- Local transfer simulation for USDC, NGN, and XLM path-payment scenarios,
+  including trustline and exchange-rate checks before live submission
 
 **Transaction Engine:**
 
@@ -184,6 +186,10 @@ npm run test
 
 # Run linting
 npm run lint
+
+# Run the transfer simulation harness
+cd apps/api
+npm test -- transfer-simulation.service.spec.ts
 Docker
 # Build and run all services
 docker-compose up --build
