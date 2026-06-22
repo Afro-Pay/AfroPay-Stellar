@@ -1,5 +1,12 @@
 version: '3.9'
 
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+    compress: "true"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -33,6 +40,7 @@ services:
     depends_on:
       - postgres
       - redis
+    logging: *default-logging
 
   frontend:
     build: ./apps/frontend
@@ -50,6 +58,7 @@ services:
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
     depends_on:
       - redis
+    logging: *default-logging
 
   fraud-service:
     build: ./services/python-analytics
