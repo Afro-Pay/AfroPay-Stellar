@@ -2,9 +2,10 @@ import { create } from 'zustand';
 import api from '../lib/api';
 
 interface Balance { asset: string; balance: string; }
-interface Transaction {
+export interface Transaction {
   id: string; destination: string; amount: string;
   assetCode: string; status: string; createdAt: string;
+  stellarTxHash?: string; fee?: string; anchorInfo?: string;
 }
 
 interface WalletStore {
