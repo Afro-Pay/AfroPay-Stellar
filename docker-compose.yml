@@ -10,6 +10,7 @@ x-logging: &default-logging
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: remitx
       POSTGRES_PASSWORD: remitx
@@ -18,14 +19,27 @@ services:
       - '5432:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U remitx -d remitx"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - '6379:6379'
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   api:
     build: ./apps/api
+    restart: unless-stopped
     ports:
       - '3001:3001'
     environment:
@@ -38,32 +52,55 @@ services:
       ANCHOR_USDC_URL: https://testanchor.stellar.org
       ANCHOR_NGN_URL: https://testanchor.stellar.org
     depends_on:
-      - postgres
-      - redis
-    logging: *default-logging
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"] # Note: Ensure your API exposes a GET /health endpoint, or change to a valid route
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   frontend:
     build: ./apps/frontend
+    restart: unless-stopped
     ports:
       - '3000:3000'
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:3001
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"] # Pings the frontend landing page
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   rust-worker:
     build: ./services/rust-worker
+    restart: unless-stopped
     environment:
       REDIS_URL: redis://redis:6379
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
     depends_on:
-      - redis
-    logging: *default-logging
+      redis:
+        condition: service_healthy
 
   fraud-service:
     build: ./services/python-analytics
+    restart: unless-stopped
     ports:
       - '8000:8000'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"] # Note: Ensure python-analytics has a /health or fallback endpoint
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
   pgdata:
