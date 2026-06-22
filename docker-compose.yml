@@ -1,5 +1,12 @@
 version: '3.9'
 
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+    compress: "true"
+
 services:
   postgres:
     image: postgres:16-alpine
