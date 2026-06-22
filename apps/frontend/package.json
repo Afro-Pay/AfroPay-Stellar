@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "audit:a11y": "node scripts/a11y-audit.mjs",
     "start": "next start"
   },
   "dependencies": {
