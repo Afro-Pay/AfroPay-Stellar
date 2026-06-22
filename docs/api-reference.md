@@ -180,6 +180,9 @@ Retrieve the transaction history for the user's wallet.
     "type": "payment",
     "amount": "10.5",
     "assetCode": "XLM",
+    "status": "RETRYING",
+    "retryAttempts": 1,
+    "lastFailureReason": "temporary Horizon timeout",
     "createdAt": "2023-10-01T12:00:00Z"
   }
 ]
@@ -199,7 +202,10 @@ Retrieve details of a specific transaction.
   "destination": "GDX...ABC",
   "amount": "10.5",
   "assetCode": "XLM",
-  "status": "success"
+  "status": "FAILED",
+  "retryAttempts": 3,
+  "lastFailureReason": "horizon transaction malformed",
+  "failedAt": "2023-10-01T12:03:00Z"
 }
 ```
 

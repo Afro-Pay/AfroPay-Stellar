@@ -26,6 +26,9 @@ export interface Transaction {
   memo?: string;
   status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED';
   stellarTxHash?: string;
+  retryAttempts: number;
+  lastFailureReason?: string;
+  failedAt?: string;
   riskScore?: number;
   flagged: boolean;
   createdAt: string;

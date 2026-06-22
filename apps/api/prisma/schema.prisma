@@ -35,6 +35,9 @@ model Transaction {
   memo           String?
   status         String   @default("PENDING")
   stellarTxHash  String?
+  retryAttempts  Int      @default(0)
+  lastFailureReason String?
+  failedAt       DateTime?
   riskScore      Float?
   flagged        Boolean  @default(false)
   createdAt      DateTime @default(now())
