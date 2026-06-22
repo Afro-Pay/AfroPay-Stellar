@@ -96,6 +96,7 @@ Component responsibilities:
 - **Stellar / anchors / Soroban**: final payment settlement, liquidity routing, and contract interactions.
 
 See [docs/architecture.md](docs/architecture.md) for a longer data-flow view.
+See [docs/deployment.md](docs/deployment.md) for production deployment, secret management, migration, staging, and rollback guidance.
 
 
 ---
