@@ -46,6 +46,57 @@ Queue (Redis / BullMQ)
 
 PostgreSQL + Redis
 
+### Detailed architecture
+
+The production shape is a polyglot service graph. The Next.js frontend talks to
+the NestJS API, the API persists application state in PostgreSQL through Prisma,
+Redis backs asynchronous jobs and cache state, the Rust worker handles Stellar
+execution, and Python analytics produces fraud and risk signals.
+
+```mermaid
+flowchart LR
+  user["User / Wallet holder"]
+  frontend["Next.js frontend\napps/frontend"]
+  api["NestJS API\napps/api"]
+  wallet["Wallet service\nkeys, balances, trustlines"]
+  tx["Transaction service\nquotes, transfers, simulations"]
+  anchor["Anchor service\ndeposit and withdrawal rails"]
+  redis["Redis / BullMQ\njobs, retries, cache"]
+  postgres["PostgreSQL + Prisma\nusers, wallets, transfers, audit data"]
+  rust["Rust worker\nservices/rust-worker"]
+  python["Python analytics\nfraud, risk scoring, monitoring"]
+  stellar["Stellar network\nHorizon, anchors, Soroban contracts"]
+
+  user --> frontend
+  frontend -->|"REST requests + wallet actions"| api
+  api --> wallet
+  api --> tx
+  api --> anchor
+  wallet --> postgres
+  tx --> postgres
+  anchor --> postgres
+  api --> redis
+  tx -->|"enqueue settlement jobs"| redis
+  redis --> rust
+  rust -->|"submit path payments / contract calls"| stellar
+  rust -->|"status + transaction hashes"| postgres
+  postgres --> python
+  python -->|"risk decisions + alerts"| api
+  anchor -->|"fiat on/off-ramp flows"| stellar
+```
+
+Component responsibilities:
+
+- **Frontend (`apps/frontend`)**: login, wallet views, send forms, balance cards, and transaction dashboards.
+- **API (`apps/api`)**: authentication, wallet APIs, transfer simulation, transaction orchestration, anchor endpoints, and persistence through Prisma.
+- **Redis / BullMQ**: decouples user-facing API calls from slower settlement work, supports retries, and stores short-lived workflow state.
+- **Rust worker (`services/rust-worker`)**: consumes queued jobs, prepares Stellar operations, submits transactions, and reports settlement state.
+- **Python analytics (`services/python-analytics`)**: evaluates fraud, risk, and monitoring signals from transaction history.
+- **PostgreSQL**: source of truth for users, wallets, transfers, simulation records, and audit-friendly transaction status.
+- **Stellar / anchors / Soroban**: final payment settlement, liquidity routing, and contract interactions.
+
+See [docs/architecture.md](docs/architecture.md) for a longer data-flow view.
+
 
 ---
 
