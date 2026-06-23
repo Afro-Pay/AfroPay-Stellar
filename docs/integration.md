@@ -153,6 +153,11 @@ This is a BullMQ consumer that processes jobs from the `transactions` queue:
 - **Deposit:** `GET {anchor_url}/sep6/deposit?asset_code=X&account=Y`
 - **Withdraw:** `GET {anchor_url}/sep6/withdraw?asset_code=X&account=Y&amount=Z`
 - **FX Rates:** Returns stub rates (USD-NGN: 1550, NGN-USD: 0.00065, XLM-USD: 0.11) — placeholder for a real FX provider
+- The controller now validates query payloads before the service runs:
+  - deposit/withdraw `asset` is limited to `USDC` and `NGN`
+  - `account` must match a Stellar public key pattern
+  - withdraw `amount` must be a positive decimal string
+  - FX rate `from`/`to` are limited to `USD`, `NGN`, and `XLM`
 
 **External calls made by Anchor Service:**
 - HTTP GET to configured anchor URLs (via axios)
