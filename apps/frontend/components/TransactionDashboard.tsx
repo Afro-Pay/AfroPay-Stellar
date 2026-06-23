@@ -82,7 +82,7 @@ export default function TransactionDashboard() {
           </div>
           <h3 className="text-xl font-semibold text-white mb-2">No Transactions Found</h3>
           <p className="text-gray-400 max-w-sm">
-            We couldn't find any transactions matching your current filters. Try adjusting them or clear all filters.
+            We couldn&apos;t find any transactions matching your current filters. Try adjusting them or clear all filters.
           </p>
         </div>
       ) : (
