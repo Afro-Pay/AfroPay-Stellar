@@ -23,3 +23,120 @@ describe('WalletService encryption', () => {
     expect(enc1).not.toBe(enc2);
   });
 });
+
+describe('WalletService reconciliation', () => {
+  let service: WalletService;
+  let prisma: any;
+
+  const wallet = {
+    id: 'wallet-1',
+    userId: 'user-1',
+    publicKey: 'GBXACCOUNT',
+    encryptedSecret: 'encrypted',
+  };
+
+  beforeEach(() => {
+    prisma = {
+      wallet: {
+        findUnique: jest.fn().mockResolvedValue(wallet),
+      },
+      transaction: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    service = new WalletService(prisma);
+  });
+
+  it('returns an in-sync report when expected assets have matching trustlines', async () => {
+    prisma.transaction.findMany.mockResolvedValue([
+      {
+        assetCode: 'USDC',
+        assetIssuer: 'GISSUER',
+        status: 'SUCCESS',
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    ]);
+    jest.spyOn(service as any, 'loadAccount').mockResolvedValue({
+      sequence: '123',
+      last_modified_ledger: 100,
+      last_modified_time: '2026-01-02T00:00:00Z',
+      balances: [
+        { asset_type: 'native', balance: '10.0000000' },
+        {
+          asset_type: 'credit_alphanum4',
+          asset_code: 'USDC',
+          asset_issuer: 'GISSUER',
+          balance: '25.0000000',
+          limit: '1000.0000000',
+        },
+      ],
+    });
+
+    const report = await service.reconcileWallet('user-1');
+
+    expect(report.status).toBe('in_sync');
+    expect(report.summary).toMatchObject({
+      discrepancyCount: 0,
+      criticalCount: 0,
+      missingTrustlineCount: 0,
+    });
+    expect(report.onChain.balances).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ asset: 'XLM', trustline: false }),
+        expect.objectContaining({ asset: 'USDC', assetIssuer: 'GISSUER', trustline: true }),
+      ]),
+    );
+  });
+
+  it('flags missing trustlines for assets referenced by application transactions', async () => {
+    prisma.transaction.findMany.mockResolvedValue([
+      {
+        assetCode: 'EURC',
+        assetIssuer: 'GEURCISSUER',
+        status: 'PENDING',
+        updatedAt: new Date('2026-01-03T00:00:00.000Z'),
+      },
+    ]);
+    jest.spyOn(service as any, 'loadAccount').mockResolvedValue({
+      sequence: '124',
+      last_modified_ledger: 101,
+      last_modified_time: '2026-01-02T00:00:00Z',
+      balances: [{ asset_type: 'native', balance: '10.0000000' }],
+    });
+
+    const report = await service.reconcileWallet('user-1');
+
+    expect(report.status).toBe('drift_detected');
+    expect(report.summary.missingTrustlineCount).toBe(1);
+    expect(report.discrepancies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'MISSING_TRUSTLINE',
+          severity: 'warning',
+          asset: 'EURC',
+          assetIssuer: 'GEURCISSUER',
+        }),
+        expect.objectContaining({
+          type: 'STALE_LEDGER_STATE',
+          severity: 'info',
+        }),
+      ]),
+    );
+  });
+
+  it('returns a critical report when the stored wallet is not found on-chain', async () => {
+    jest.spyOn(service as any, 'loadAccount').mockRejectedValue({ response: { status: 404 } });
+
+    const report = await service.reconcileWallet('user-1');
+
+    expect(report.status).toBe('drift_detected');
+    expect(report.onChain.accountFound).toBe(false);
+    expect(report.summary.criticalCount).toBe(1);
+    expect(report.discrepancies).toEqual([
+      expect.objectContaining({
+        type: 'ON_CHAIN_ACCOUNT_NOT_FOUND',
+        severity: 'critical',
+      }),
+    ]);
+  });
+});

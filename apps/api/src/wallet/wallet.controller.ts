@@ -1,13 +1,13 @@
 import { Controller, Get, Post, Body, UseGuards, Request } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import { WalletService } from './wallet.service';
 import { IsString } from 'class-validator';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 class ImportWalletDto {
   @IsString() secretKey: string;
 }
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(AuthGuard('jwt'))
 @Controller('wallet')
 export class WalletController {
   constructor(private wallet: WalletService) {}
@@ -20,6 +20,11 @@ export class WalletController {
   @Get('balances')
   balances(@Request() req: any) {
     return this.wallet.getBalances(req.user.userId);
+  }
+
+  @Get('reconcile')
+  reconcile(@Request() req: any) {
+    return this.wallet.reconcileWallet(req.user.userId);
   }
 
   @Get('export')
