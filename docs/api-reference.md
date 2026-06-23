@@ -2,7 +2,7 @@
 
 This document provides a comprehensive guide to the NestJS backend API. Each section covers the available endpoints, required Data Transfer Objects (DTOs), expected response shapes, and concise example payloads to help integrators call the API reliably.
 
-All endpoints except `/auth/register` and `/auth/login` require an Authorization header with a valid JWT token:
+All endpoints except `/auth/register`, `/auth/login`, and `/auth/refresh` require an Authorization header with a valid access token:
 `Authorization: Bearer <token>`
 
 ---
@@ -29,9 +29,10 @@ Create a new user account.
 **Example Response:**
 ```json
 {
-  "userId": "123e4567-e89b-12d3-a456-426614174000",
-  "email": "user@example.com",
-  "accessToken": "eyJhbG..."
+  "access_token": "eyJhbG...",
+  "refresh_token": "eyJhbG...",
+  "token_type": "Bearer",
+  "expires_in": "15m"
 }
 ```
 
@@ -55,7 +56,74 @@ Authenticate an existing user.
 **Example Response:**
 ```json
 {
-  "accessToken": "eyJhbG..."
+  "access_token": "eyJhbG...",
+  "refresh_token": "eyJhbG...",
+  "token_type": "Bearer",
+  "expires_in": "15m"
+}
+```
+
+### 1.3 Refresh Session
+Exchange a valid refresh token for a new access token and refresh token pair.
+
+**Endpoint:** `POST /auth/refresh`
+
+**Request DTO:**
+- `refresh_token` (string): Refresh token returned by register, login, or a previous refresh call.
+
+**Example Request:**
+```json
+{
+  "refresh_token": "eyJhbG..."
+}
+```
+
+**Example Response:**
+```json
+{
+  "access_token": "eyJhbG...",
+  "refresh_token": "eyJhbG...",
+  "token_type": "Bearer",
+  "expires_in": "15m"
+}
+```
+
+**Auth Error Responses:**
+
+Expired access tokens on protected routes return:
+```json
+{
+  "statusCode": 401,
+  "message": {
+    "code": "AUTH_TOKEN_EXPIRED",
+    "message": "Access token expired. Refresh the session or sign in again.",
+    "expiredAt": "2026-01-01T00:00:00.000Z"
+  },
+  "error": "Unauthorized"
+}
+```
+
+Missing or malformed access tokens on protected routes return:
+```json
+{
+  "statusCode": 401,
+  "message": {
+    "code": "AUTH_TOKEN_INVALID",
+    "message": "Access token is invalid or missing."
+  },
+  "error": "Unauthorized"
+}
+```
+
+Invalid, expired, or access-token-shaped refresh tokens return:
+```json
+{
+  "statusCode": 401,
+  "message": {
+    "code": "INVALID_REFRESH_TOKEN",
+    "message": "Refresh token is invalid or expired. Please sign in again."
+  },
+  "error": "Unauthorized"
 }
 ```
 

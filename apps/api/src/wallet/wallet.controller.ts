@@ -1,13 +1,13 @@
 import { Controller, Get, Post, Body, UseGuards, Request } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { WalletService } from './wallet.service';
 import { IsString } from 'class-validator';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 class ImportWalletDto {
   @IsString() secretKey: string;
 }
 
-@UseGuards(AuthGuard('jwt'))
+@UseGuards(JwtAuthGuard)
 @Controller('wallet')
 export class WalletController {
   constructor(private wallet: WalletService) {}
