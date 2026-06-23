@@ -132,6 +132,73 @@ Import an existing Stellar wallet using a secret key.
 }
 ```
 
+### 2.5 Reconcile Wallet
+Compare the stored wallet record and recent application transaction activity with the current Stellar account state from Horizon.
+
+**Endpoint:** `GET /wallet/reconcile`
+
+**Example Response:**
+```json
+{
+  "status": "drift_detected",
+  "checkedAt": "2026-01-03T12:00:00.000Z",
+  "wallet": {
+    "id": "wallet-123",
+    "publicKey": "GBX...XYZ"
+  },
+  "onChain": {
+    "accountFound": true,
+    "horizonUrl": "https://horizon-testnet.stellar.org",
+    "sequence": "123456",
+    "lastModifiedLedger": 1234,
+    "lastModifiedTime": "2026-01-02T00:00:00Z",
+    "balances": [
+      {
+        "asset": "XLM",
+        "assetIssuer": null,
+        "balance": "10.0000000",
+        "trustline": false
+      }
+    ]
+  },
+  "application": {
+    "trackedAssetCount": 1,
+    "recentTransactionCount": 3,
+    "expectedAssets": [
+      {
+        "asset": "USDC",
+        "assetIssuer": "GISSUER...",
+        "transactionCount": 2,
+        "statuses": {
+          "PENDING": 1,
+          "SUCCESS": 1
+        },
+        "lastTransactionAt": "2026-01-03T00:00:00.000Z"
+      }
+    ]
+  },
+  "summary": {
+    "discrepancyCount": 1,
+    "criticalCount": 0,
+    "missingTrustlineCount": 1
+  },
+  "discrepancies": [
+    {
+      "type": "MISSING_TRUSTLINE",
+      "severity": "warning",
+      "message": "Application activity references USDC, but the wallet has no matching on-chain trustline.",
+      "asset": "USDC",
+      "assetIssuer": "GISSUER..."
+    }
+  ]
+}
+```
+
+**Discrepancy Types:**
+- `ON_CHAIN_ACCOUNT_NOT_FOUND`: The stored wallet public key is not funded or cannot be found on Horizon.
+- `MISSING_TRUSTLINE`: Recent application activity references a non-native asset that is absent from the wallet's on-chain trustlines.
+- `STALE_LEDGER_STATE`: Application transaction state is newer than the last observed on-chain account modification time.
+
 ---
 
 ## 3. Transaction Endpoints
@@ -273,31 +340,6 @@ Get the foreign exchange rate between two assets.
 
 ---
 
-## 5. Reconciliation Endpoints
+## 5. Reconciliation Notes
 
-### 5.1 Reconcile Transactions
-Trigger a manual or automated reconciliation process to match off-chain records with on-chain Stellar transactions.
-
-**Endpoint:** `POST /reconciliation/sync`
-
-**Request DTO:**
-- `startDate` (string): The start date for reconciliation (ISO 8601).
-- `endDate` (string): The end date for reconciliation (ISO 8601).
-
-**Example Request:**
-```json
-{
-  "startDate": "2023-09-01T00:00:00Z",
-  "endDate": "2023-09-30T23:59:59Z"
-}
-```
-
-**Example Response:**
-```json
-{
-  "status": "completed",
-  "matchedRecords": 150,
-  "discrepancies": 0,
-  "reportUrl": "https://api.afropay.com/reports/recon-123.pdf"
-}
-```
+Wallet reconciliation is exposed through `GET /wallet/reconcile`. It reports wallet drift directly for the authenticated user's stored wallet and does not mutate balances, transactions, or trustlines.
