@@ -173,13 +173,7 @@ cd apps/frontend
 npm run dev
 Environment Variables
 
-Create a .env file with the following keys:
-
-DATABASE_URL=postgresql://user:password@localhost:5432/remitx
-REDIS_URL=redis://localhost:6379
-JWT_SECRET=your_secret_key
-STELLAR_NETWORK=testnet
-STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
+See [docs/environment-variables.md](docs/environment-variables.md) for a complete reference of all required environment variables across all services. Copy `.env.example` to `.env` and fill in the values.
 Testing
 # Run unit tests
 npm run test
