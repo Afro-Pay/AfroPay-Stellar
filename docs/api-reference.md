@@ -5,6 +5,38 @@ This document provides a comprehensive guide to the NestJS backend API. Each sec
 All endpoints except `/auth/register` and `/auth/login` require an Authorization header with a valid JWT token:
 `Authorization: Bearer <token>`
 
+## Rate Limiting
+
+Public-facing write and anchor endpoints are throttled per client bucket to
+protect login, wallet creation, transaction submission, and anchor quote flows
+from abuse. Limits can be configured through environment variables:
+
+| Variable | Default | Applies to |
+| --- | --- | --- |
+| `RATE_LIMIT_MAX` | `60` | Global fallback limit per window. |
+| `RATE_LIMIT_WINDOW_MS` | `60000` | Global fallback window in milliseconds. |
+| `LOGIN_RATE_LIMIT_MAX` | `5` | `POST /auth/login`. |
+| `LOGIN_RATE_LIMIT_WINDOW_MS` | `60000` | Login-specific window. |
+| `PUBLIC_API_RATE_LIMIT_MAX` | `20` | `POST /wallet/create`, `POST /transactions/send`. |
+| `PUBLIC_API_RATE_LIMIT_WINDOW_MS` | `60000` | Public API write window. |
+| `ANCHOR_RATE_LIMIT_MAX` | `20` | `GET /anchor/deposit`, `GET /anchor/withdraw`, `GET /anchor/fx-rate`. |
+| `ANCHOR_RATE_LIMIT_WINDOW_MS` | `60000` | Anchor endpoint window. |
+
+When a client exceeds a limit, the API returns HTTP `429` with rate-limit
+headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and
+`Retry-After`) and a JSON body that clients can distinguish from validation or
+authentication errors:
+
+```json
+{
+  "code": "RATE_LIMITED",
+  "message": "Too many requests. Please retry after the rate limit window resets.",
+  "retryAfterSeconds": 30,
+  "limit": 20,
+  "windowMs": 60000
+}
+```
+
 ---
 
 ## 1. Authentication Endpoints
