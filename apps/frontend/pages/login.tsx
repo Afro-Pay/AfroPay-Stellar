@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useRouter } from 'next/router';
-import api from '../lib/api';
+import api, { storeSessionTokens } from '../lib/api';
 
 export default function Login() {
   const router = useRouter();
@@ -14,7 +14,7 @@ export default function Login() {
     try {
       const endpoint = isRegister ? '/auth/register' : '/auth/login';
       const { data } = await api.post(endpoint, { email, password });
-      localStorage.setItem('token', data.access_token);
+      storeSessionTokens(data);
       router.push('/');
     } catch {
       setError('Authentication failed. Check your credentials.');
