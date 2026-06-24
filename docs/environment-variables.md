@@ -46,6 +46,13 @@ These are used exclusively in `docker-compose.yml` for the PostgreSQL container:
 | `POSTGRES_PASSWORD` | PostgreSQL password | `remitx` |
 | `POSTGRES_DB` | PostgreSQL database name | `remitx` |
 
+## Docker Compose Environment Wiring
+
+The local Compose stack loads the repository root `.env` file and uses the values there when available.
+If `.env` is missing, Compose falls back to the development defaults defined in `docker-compose.yml`.
+
+This makes it easy to start the full stack with one command while still allowing developers to override secrets and service URLs locally.
+
 ## Security Notes
 
 - **`JWT_SECRET`** — If compromised, an attacker can forge authentication tokens. Rotate immediately if leaked.
