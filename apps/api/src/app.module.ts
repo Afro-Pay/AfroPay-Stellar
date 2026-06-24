@@ -4,7 +4,7 @@ import { WalletModule } from './wallet/wallet.module';
 import { TransactionModule } from './transaction/transaction.module';
 import { AnchorModule } from './anchor/anchor.module';
 import { AuthModule } from './auth/auth.module';
-import { envValidationSchema } from './config/env.validation';
+import { RateLimitModule } from './rate-limit/rate-limit.module';
 
 @Module({
   imports: [
@@ -20,6 +20,7 @@ import { envValidationSchema } from './config/env.validation';
     WalletModule,
     TransactionModule,
     AnchorModule,
+    RateLimitModule,
   ],
 })
 export class AppModule {}
