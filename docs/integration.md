@@ -88,7 +88,8 @@ The frontend (Next.js) has **no direct blockchain interaction**. All Stellar ope
 | Method | Endpoint | Purpose |
 |---|---|---|
 | POST | `/auth/register` | Create account (email + password) |
-| POST | `/auth/login` | Authenticate, receive JWT |
+| POST | `/auth/login` | Authenticate, receive access and refresh tokens |
+| POST | `/auth/refresh` | Exchange a refresh token for a new access token |
 | POST | `/wallet/create` | Generate Stellar keypair |
 | GET | `/wallet/balances` | Fetch balances from Horizon |
 | POST | `/wallet/import` | Import existing secret key |
@@ -100,7 +101,7 @@ The frontend (Next.js) has **no direct blockchain interaction**. All Stellar ope
 | GET | `/anchor/withdraw` | SEP-6 withdraw info (proxied) |
 | GET | `/anchor/fx-rate` | FX rates (stub) |
 
-**Communication:** HTTP REST via Axios. JWT stored in `localStorage`, attached as `Authorization: Bearer <token>` header automatically by the Axios interceptor (`apps/frontend/lib/api.ts`).
+**Communication:** HTTP REST via Axios. The frontend stores the access token and refresh token in `localStorage`, attaches the access token as `Authorization: Bearer <token>`, and automatically retries once through `/auth/refresh` when the API returns `AUTH_TOKEN_EXPIRED` (`apps/frontend/lib/api.ts`).
 
 **State management:** Zustand store (`apps/frontend/store/walletStore.ts`) manages balances, transactions, and send operations.
 
@@ -109,8 +110,9 @@ The frontend (Next.js) has **no direct blockchain interaction**. All Stellar ope
 ### 2. API Gateway Internal Services
 
 #### Auth Service (`apps/api/src/auth/`)
-- **Registration:** Validates email/password, hashes password with bcrypt (10 rounds), stores user in PostgreSQL, returns signed JWT (7-day expiry).
-- **Login:** Validates credentials, returns JWT.
+- **Registration:** Validates email/password, hashes password with bcrypt (10 rounds), stores user in PostgreSQL, returns an access token plus refresh token.
+- **Login:** Validates credentials, returns an access token plus refresh token.
+- **Refresh:** Validates a refresh token via `POST /auth/refresh`, then issues a new access/refresh token pair.
 - **No Stellar interaction** — auth is purely application-level.
 
 #### Wallet Service (`apps/api/src/wallet/wallet.service.ts`)
@@ -153,6 +155,11 @@ This is a BullMQ consumer that processes jobs from the `transactions` queue:
 - **Deposit:** `GET {anchor_url}/sep6/deposit?asset_code=X&account=Y`
 - **Withdraw:** `GET {anchor_url}/sep6/withdraw?asset_code=X&account=Y&amount=Z`
 - **FX Rates:** Returns stub rates (USD-NGN: 1550, NGN-USD: 0.00065, XLM-USD: 0.11) — placeholder for a real FX provider
+- The controller now validates query payloads before the service runs:
+  - deposit/withdraw `asset` is limited to `USDC` and `NGN`
+  - `account` must match a Stellar public key pattern
+  - withdraw `amount` must be a positive decimal string
+  - FX rate `from`/`to` are limited to `USD`, `NGN`, and `XLM`
 
 **External calls made by Anchor Service:**
 - HTTP GET to configured anchor URLs (via axios)
@@ -424,10 +431,10 @@ Frontend → GET /anchor/deposit or /anchor/withdraw → AnchorService
 
 | Concern | Implementation |
 |---|---|
-| **Auth** | JWT (7-day expiry) + bcrypt password hashing (10 rounds) |
+| **Auth** | Short-lived access JWT + refresh JWT pair, configurable expiries, plus bcrypt password hashing (10 rounds) |
 | **Key storage** | AES-256-CBC encryption (32-byte key from `ENCRYPTION_KEY` env var) |
 | **Key exposure** | Secret keys never sent to frontend by default; `/wallet/export` decrypts server-side |
-| **API protection** | `@UseGuards(AuthGuard('jwt'))` on all wallet/transaction/anchor endpoints |
+| **API protection** | `@UseGuards(JwtAuthGuard)` on all wallet/transaction/anchor endpoints, with explicit `AUTH_TOKEN_EXPIRED` and `AUTH_TOKEN_INVALID` responses |
 | **Transaction signing** | Done server-side in TransactionProcessor (secret loaded from DB, decrypted, used to sign, never logged) |
 
 ---

@@ -1,4 +1,5 @@
 mod stellar;
+mod trustline;
 mod queue;
 mod models;
 mod metrics;

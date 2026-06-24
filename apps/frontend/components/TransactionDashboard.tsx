@@ -55,8 +55,8 @@ export default function TransactionDashboard() {
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 min-h-[50vh]">
-        <Loader2 className="w-10 h-10 text-indigo-500 animate-spin mb-4" />
+      <div className="flex flex-col items-center justify-center py-24 min-h-[50vh]" role="status" aria-live="polite">
+        <Loader2 className="w-10 h-10 text-indigo-500 animate-spin mb-4" aria-hidden="true" />
         <p className="text-gray-400">Loading your transactions...</p>
       </div>
     );
@@ -78,11 +78,11 @@ export default function TransactionDashboard() {
       {filteredTransactions.length === 0 ? (
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-12 flex flex-col items-center justify-center text-center min-h-[40vh]">
           <div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mb-4">
-            <Inbox className="w-8 h-8 text-gray-500" />
+            <Inbox className="w-8 h-8 text-gray-500" aria-hidden="true" />
           </div>
           <h3 className="text-xl font-semibold text-white mb-2">No Transactions Found</h3>
           <p className="text-gray-400 max-w-sm">
-            We couldn't find any transactions matching your current filters. Try adjusting them or clear all filters.
+            We couldn&apos;t find any transactions matching your current filters. Try adjusting them or clear all filters.
           </p>
         </div>
       ) : (
@@ -100,18 +100,22 @@ export default function TransactionDashboard() {
           </p>
           <div className="flex gap-2">
             <button
+              type="button"
               onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
               disabled={currentPage === 1}
+              aria-label={`Go to previous page, page ${Math.max(1, currentPage - 1)} of ${totalPages}`}
               className="px-4 py-2 bg-gray-900 border border-gray-800 text-sm font-medium rounded-lg text-gray-300 hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
             >
-              <ChevronLeft className="w-4 h-4" /> Previous
+              <ChevronLeft className="w-4 h-4" aria-hidden="true" /> Previous
             </button>
             <button
+              type="button"
               onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
               disabled={currentPage === totalPages}
+              aria-label={`Go to next page, page ${Math.min(totalPages, currentPage + 1)} of ${totalPages}`}
               className="px-4 py-2 bg-gray-900 border border-gray-800 text-sm font-medium rounded-lg text-gray-300 hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
             >
-              Next <ChevronRight className="w-4 h-4" />
+              Next <ChevronRight className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
         </div>
