@@ -223,6 +223,75 @@ pub async fn check_trustlines_batch(
     results
 }
 
+/// Remove an existing trustline by setting its limit to zero.
+///
+/// Only succeeds when the account balance for the asset is zero.
+/// Returns [`TrustlineError::Other`] if the trustline is missing or
+/// the balance is non-zero.
+pub async fn remove_trustline(
+    horizon_url: &str,
+    source_secret: &str,
+    asset: &TrustlineAsset,
+) -> Result<(), TrustlineError> {
+    let public_key = derive_public_key(source_secret)?;
+
+    match check_trustline(horizon_url, &public_key, asset).await? {
+        TrustlineStatus::Missing => {
+            return Err(TrustlineError::Other(anyhow!(
+                "No trustline for {} exists on {}",
+                asset.code,
+                public_key
+            )));
+        }
+        TrustlineStatus::Exists { ref balance, .. } => {
+            let bal: f64 = balance.parse().unwrap_or(0.0);
+            if bal > 0.0 {
+                return Err(TrustlineError::Other(anyhow!(
+                    "Cannot remove trustline for {}: account still holds {}",
+                    asset.code,
+                    balance
+                )));
+            }
+        }
+        // Zero-limit and unauthorised trustlines can still be removed.
+        _ => {}
+    }
+
+    submit_remove_trust(horizon_url, source_secret, asset).await?;
+    info!(asset = %asset.code, account = %public_key, "Trustline removed");
+    Ok(())
+}
+
+/// Ensure trustline with configurable retries.
+///
+/// Retries up to `max_retries` times with a fixed `delay_ms` between attempts.
+/// Useful when the account may be newly funded and Horizon hasn't indexed it yet.
+pub async fn ensure_trustline_with_retry(
+    horizon_url: &str,
+    source_secret: &str,
+    asset: &TrustlineAsset,
+    max_retries: u32,
+    delay_ms: u64,
+) -> Result<(), TrustlineError> {
+    let mut attempt = 0;
+    loop {
+        match ensure_trustline(horizon_url, source_secret, asset).await {
+            Ok(()) => return Ok(()),
+            Err(TrustlineError::AccountNotFound(_)) if attempt < max_retries => {
+                attempt += 1;
+                warn!(
+                    asset = %asset.code,
+                    attempt,
+                    max_retries,
+                    "Account not found, retrying after {}ms", delay_ms
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 // ── Private helpers ──────────────────────────────────────────────────────────
 
 /// Derives the public key from a secret key.
@@ -244,6 +313,24 @@ async fn submit_change_trust(
     source_secret: &str,
     asset: &TrustlineAsset,
 ) -> Result<(), TrustlineError> {
+    submit_change_trust_with_limit(horizon_url, source_secret, asset, "922337203685.4775807").await
+}
+
+/// Submits a ChangeTrust with limit=0 to remove a trustline.
+async fn submit_remove_trust(
+    horizon_url: &str,
+    source_secret: &str,
+    asset: &TrustlineAsset,
+) -> Result<(), TrustlineError> {
+    submit_change_trust_with_limit(horizon_url, source_secret, asset, "0").await
+}
+
+async fn submit_change_trust_with_limit(
+    horizon_url: &str,
+    source_secret: &str,
+    asset: &TrustlineAsset,
+    limit: &str,
+) -> Result<(), TrustlineError> {
     let client = Client::new();
     let public_key = derive_public_key(source_secret)?;
 
@@ -262,11 +349,12 @@ async fn submit_change_trust(
 
     // Build a stub ChangeTrust XDR envelope.
     // In production, use stellar-xdr to construct:
-    //   Operation::ChangeTrust { asset: Asset::new(code, issuer), limit: i64::MAX }
+    //   Operation::ChangeTrust { asset: Asset::new(code, issuer), limit: parsed_limit }
     let envelope_xdr = format!(
-        "STUB_CHANGE_TRUST_{}_{}_{}_seq{}",
+        "STUB_CHANGE_TRUST_{}_{}_{}_{}_seq{}",
         asset.code,
         asset.issuer,
+        limit,
         public_key,
         sequence + 1
     );
@@ -281,7 +369,6 @@ async fn submit_change_trust(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        // Surface Horizon result codes for authorisation / limit issues.
         if body.contains("op_low_reserve") {
             return Err(TrustlineError::Other(anyhow!(
                 "Insufficient XLM reserve to create trustline (op_low_reserve)"
