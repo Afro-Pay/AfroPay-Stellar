@@ -26,26 +26,54 @@ export default function Login() {
       <form onSubmit={submit} className="bg-gray-900 p-8 rounded-xl w-full max-w-sm space-y-4">
         <h1 className="text-2xl font-bold text-center">RemitX</h1>
         <p className="text-center text-gray-400">{isRegister ? 'Create account' : 'Sign in'}</p>
-        {error && <p className="text-red-400 text-sm">{error}</p>}
-        <input
-          className="w-full bg-gray-800 rounded-lg p-3 outline-none"
-          type="email" placeholder="Email" value={email}
-          onChange={(e) => setEmail(e.target.value)} required
-        />
-        <input
-          className="w-full bg-gray-800 rounded-lg p-3 outline-none"
-          type="password" placeholder="Password (min 8 chars)" value={password}
-          onChange={(e) => setPassword(e.target.value)} required minLength={8}
-        />
-        <button className="w-full bg-indigo-600 hover:bg-indigo-700 rounded-lg p-3 font-semibold">
+        {error && (
+          <p id="auth-error" className="text-red-400 text-sm" role="alert">
+            {error}
+          </p>
+        )}
+        <div>
+          <label htmlFor="auth-email" className="block text-sm font-medium text-gray-300 mb-1">
+            Email
+          </label>
+          <input
+            id="auth-email"
+            name="email"
+            className="w-full bg-gray-800 rounded-lg p-3 outline-none focus:ring-2 focus:ring-indigo-500"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+            aria-describedby={error ? 'auth-error' : undefined}
+            required
+          />
+        </div>
+        <div>
+          <label htmlFor="auth-password" className="block text-sm font-medium text-gray-300 mb-1">
+            Password <span className="text-gray-500">(minimum 8 characters)</span>
+          </label>
+          <input
+            id="auth-password"
+            name="password"
+            className="w-full bg-gray-800 rounded-lg p-3 outline-none focus:ring-2 focus:ring-indigo-500"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete={isRegister ? 'new-password' : 'current-password'}
+            aria-describedby={error ? 'auth-error' : undefined}
+            required
+            minLength={8}
+          />
+        </div>
+        <button className="w-full bg-indigo-600 hover:bg-indigo-700 rounded-lg p-3 font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-300">
           {isRegister ? 'Register' : 'Login'}
         </button>
-        <p
-          className="text-center text-sm text-gray-400 cursor-pointer"
+        <button
+          type="button"
+          className="w-full text-center text-sm text-gray-400 hover:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded"
           onClick={() => setIsRegister(!isRegister)}
         >
           {isRegister ? 'Already have an account? Login' : "Don't have an account? Register"}
-        </p>
+        </button>
       </form>
     </main>
   );
