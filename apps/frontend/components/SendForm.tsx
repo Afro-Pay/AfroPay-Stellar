@@ -27,59 +27,74 @@ export default function SendForm() {
   };
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="bg-white dark:bg-gray-900 rounded-xl p-4 space-y-3 border border-gray-200/80 dark:border-gray-800"
-    >
-      <input
-        className="w-full bg-gray-100 dark:bg-gray-800 rounded-lg p-3 text-sm outline-none text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
-        placeholder="Destination public key"
-        value={form.destinationPublicKey}
-        onChange={(e) =>
-          setForm({...form, destinationPublicKey: e.target.value})
-        }
-        required
-      />
-      <div className="flex gap-2">
+    <form onSubmit={handleSubmit} className="bg-gray-900 rounded-xl p-4 space-y-3" aria-describedby="send-form-status">
+      <div>
+        <label htmlFor="destination-public-key" className="block text-xs font-medium text-gray-300 mb-1">
+          Destination public key
+        </label>
         <input
-          className="flex-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-3 text-sm outline-none text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
-          placeholder="Amount"
-          type="number"
-          step="0.0000001"
-          min="0"
-          value={form.amount}
-          onChange={(e) => setForm({...form, amount: e.target.value})}
+          id="destination-public-key"
+          name="destinationPublicKey"
+          className="w-full bg-gray-800 rounded-lg p-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+          placeholder="G..."
+          value={form.destinationPublicKey}
+          onChange={(e) => setForm({ ...form, destinationPublicKey: e.target.value })}
+          autoComplete="off"
           required
         />
-        <select
-          className="bg-gray-100 dark:bg-gray-800 rounded-lg p-3 text-sm outline-none text-gray-900 dark:text-white"
-          value={form.assetCode}
-          onChange={(e) => setForm({...form, assetCode: e.target.value})}
-        >
-          {ASSETS.map((a) => (
-            <option
-              key={a}
-              className="bg-white text-gray-900 dark:bg-gray-900 dark:text-white"
-            >
-              {a}
-            </option>
-          ))}
-        </select>
       </div>
-      <input
-        className="w-full bg-gray-100 dark:bg-gray-800 rounded-lg p-3 text-sm outline-none text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
-        placeholder="Memo (optional)"
-        value={form.memo}
-        onChange={(e) => setForm({...form, memo: e.target.value})}
-      />
-      <button className="w-full bg-indigo-600 hover:bg-indigo-700 rounded-lg p-3 font-semibold text-sm">
+      <div className="flex gap-2">
+        <div className="flex-1">
+          <label htmlFor="transfer-amount" className="block text-xs font-medium text-gray-300 mb-1">
+            Amount
+          </label>
+          <input
+            id="transfer-amount"
+            name="amount"
+            className="w-full bg-gray-800 rounded-lg p-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+            placeholder="0.00"
+            type="number"
+            step="0.0000001"
+            min="0"
+            value={form.amount}
+            onChange={(e) => setForm({ ...form, amount: e.target.value })}
+            required
+          />
+        </div>
+        <div>
+          <label htmlFor="transfer-asset" className="block text-xs font-medium text-gray-300 mb-1">
+            Asset
+          </label>
+          <select
+            id="transfer-asset"
+            name="assetCode"
+            className="bg-gray-800 rounded-lg p-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+            value={form.assetCode}
+            onChange={(e) => setForm({ ...form, assetCode: e.target.value })}
+          >
+            {ASSETS.map((a) => <option key={a}>{a}</option>)}
+          </select>
+        </div>
+      </div>
+      <div>
+        <label htmlFor="transfer-memo" className="block text-xs font-medium text-gray-300 mb-1">
+          Memo <span className="text-gray-500">(optional)</span>
+        </label>
+        <input
+          id="transfer-memo"
+          name="memo"
+          className="w-full bg-gray-800 rounded-lg p-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+          placeholder="Invoice or note"
+          value={form.memo}
+          onChange={(e) => setForm({ ...form, memo: e.target.value })}
+        />
+      </div>
+      <button className="w-full bg-indigo-600 hover:bg-indigo-700 rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
         Send
       </button>
-      {status && (
-        <p className="text-sm text-center text-gray-500 dark:text-gray-400">
-          {status}
-        </p>
-      )}
+      <p id="send-form-status" className="text-sm text-center text-gray-400" role="status" aria-live="polite">
+        {status}
+      </p>
     </form>
   );
 }
