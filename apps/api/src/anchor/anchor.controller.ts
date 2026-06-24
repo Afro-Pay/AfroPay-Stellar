@@ -1,9 +1,8 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { AnchorService } from './anchor.service';
-import { DepositQueryDto, FxRateQueryDto, WithdrawQueryDto } from './anchor.query';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
-@UseGuards(AuthGuard('jwt'))
+@UseGuards(JwtAuthGuard)
 @Controller('anchor')
 export class AnchorController {
   constructor(private anchor: AnchorService) {}

@@ -7,6 +7,10 @@ class AuthDto {
   @IsString() @MinLength(8) password: string;
 }
 
+class RefreshSessionDto {
+  @IsString() refresh_token: string;
+}
+
 @Controller('auth')
 export class AuthController {
   constructor(private auth: AuthService) {}
@@ -19,5 +23,10 @@ export class AuthController {
   @Post('login')
   login(@Body() dto: AuthDto) {
     return this.auth.login(dto.email, dto.password);
+  }
+
+  @Post('refresh')
+  refresh(@Body() dto: RefreshSessionDto) {
+    return this.auth.refreshSession(dto.refresh_token);
   }
 }
