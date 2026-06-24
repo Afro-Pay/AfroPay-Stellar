@@ -1,4 +1,4 @@
-version: '3.9'
+version: "3.9"
 
 # =============================================================================
 # AfroPay-Stellar — Docker Compose (Local Development)
@@ -30,7 +30,7 @@ services:
       POSTGRES_PASSWORD: remitx
       POSTGRES_DB: remitx
     ports:
-      - '5432:5432'
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -44,7 +44,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - '6379:6379'
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -55,14 +55,15 @@ services:
     build: ./apps/api
     restart: unless-stopped
     ports:
-      - '3001:3001'
+      - "3001:3001"
     environment:
       NODE_ENV: development
       PORT: 3001
       DATABASE_URL: postgresql://remitx:remitx@postgres:5432/remitx
       REDIS_URL: redis://redis:6379
       JWT_SECRET: change_me_in_production
-      ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      # Replace with a random 32-byte hex master key before deployment.
+      ENCRYPTION_KEY: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
       STELLAR_NETWORK: testnet
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
       ANCHOR_USDC_URL: https://testanchor.stellar.org
@@ -83,7 +84,7 @@ services:
     build: ./apps/frontend
     restart: unless-stopped
     ports:
-      - '3000:3000'
+      - "3000:3000"
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:3001
     depends_on:
@@ -110,7 +111,7 @@ services:
     build: ./services/python-analytics
     restart: unless-stopped
     ports:
-      - '8000:8000'
+      - "8000:8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
