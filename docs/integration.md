@@ -144,7 +144,7 @@ This is a BullMQ consumer that processes jobs from the `transactions` queue:
    - Adds an optional memo if provided
    - Signs the transaction with the source keypair
 4. **Submit to Horizon:** Calls `server.submitTransaction(transaction)` which posts the signed XDR to Horizon
-5. **Update DB:** On success, updates the transaction record to `SUCCESS` and stores the `stellarTxHash`. On failure, retries up to 3 times with exponential backoff (2s → 4s → 8s), then marks as `FAILED` or `RETRYING`.
+5. **Update DB:** On success, updates the transaction record to `SUCCESS` and stores the `stellarTxHash`. On failure, records `retryAttempts` and `lastFailureReason`, retries up to 3 times with exponential backoff (2s → 4s → 8s), then marks as `FAILED` with `failedAt` or `RETRYING`.
 
 **Horizon calls made by Transaction Processor:**
 - `server.loadAccount(publicKey)` — get source account sequence
@@ -351,8 +351,9 @@ API                        Redis "stellar_jobs"         Rust Worker             
 
 - **Max attempts:** 3
 - **Backoff:** Exponential (2s, 4s, 8s)
-- **Status mapping:** `attemptsMade < 2` → `RETRYING`, `attemptsMade >= 2` → `FAILED`
-- **On success:** Status set to `SUCCESS`, `stellarTxHash` stored
+- **Status mapping:** attempts before the max are stored as `RETRYING`; the final exhausted attempt is stored as `FAILED`
+- **Failure tracking:** every failed attempt updates `retryAttempts` and `lastFailureReason`; the exhausted final attempt also sets `failedAt`
+- **On success:** Status set to `SUCCESS`, `stellarTxHash` stored, previous failure context cleared
 
 ---
 
@@ -415,7 +416,7 @@ TransactionProcessor (async):
   → Builds TransactionBuilder + Operation.payment()
   → Signs with source keypair
   → Submits to Horizon via server.submitTransaction()
-  → Updates DB to SUCCESS/FAILED with stellarTxHash
+  → Updates DB to SUCCESS with stellarTxHash, or RETRYING/FAILED with retryAttempts and failure context
 ```
 
 ### Deposit/Withdraw Info Flow

@@ -11,9 +11,27 @@ import {
   Asset,
   BASE_FEE,
 } from 'stellar-sdk';
+import { TRANSACTION_MAX_ATTEMPTS } from './transaction-retry.config';
 
 const server = new Horizon.Server(process.env.STELLAR_HORIZON_URL ?? 'https://horizon-testnet.stellar.org');
 const network = process.env.STELLAR_NETWORK === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
+
+function maxAttempts(job: Job): number {
+  const attempts = Number(job.opts.attempts ?? TRANSACTION_MAX_ATTEMPTS);
+  return Number.isFinite(attempts) && attempts > 0 ? attempts : TRANSACTION_MAX_ATTEMPTS;
+}
+
+function currentAttempt(job: Job): number {
+  return job.attemptsMade + 1;
+}
+
+function failureReason(err: unknown): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+
+  return String(err || 'Unknown transaction submission failure');
+}
 
 @Processor('transactions')
 export class TransactionProcessor {
@@ -47,15 +65,33 @@ export class TransactionProcessor {
 
       await this.prisma.transaction.update({
         where: { id: txId },
-        data: { status: 'SUCCESS', stellarTxHash: result.hash },
+        data: {
+          status: 'SUCCESS',
+          stellarTxHash: result.hash,
+          retryAttempts: job.attemptsMade,
+          lastFailureReason: null,
+          failedAt: null,
+        },
       });
 
       this.logger.log(`Transaction ${txId} succeeded: ${result.hash}`);
     } catch (err: any) {
-      this.logger.error(`Transaction ${txId} failed: ${err.message}`);
+      const attempt = currentAttempt(job);
+      const attempts = maxAttempts(job);
+      const isFinalAttempt = attempt >= attempts;
+      const reason = failureReason(err);
+
+      this.logger.error(
+        `Transaction ${txId} attempt ${attempt}/${attempts} failed: ${reason}`,
+      );
       await this.prisma.transaction.update({
         where: { id: txId },
-        data: { status: job.attemptsMade >= 2 ? 'FAILED' : 'RETRYING' },
+        data: {
+          status: isFinalAttempt ? 'FAILED' : 'RETRYING',
+          retryAttempts: attempt,
+          lastFailureReason: reason,
+          failedAt: isFinalAttempt ? new Date() : null,
+        },
       });
       throw err;
     }
