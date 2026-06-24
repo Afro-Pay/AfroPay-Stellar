@@ -80,7 +80,7 @@ export class AnchorService {
     const key = `fx:${from}:${to}`;
 
     // Try to read cached value
-    let cachedRaw = await this.redis.get(key);
+    const cachedRaw = await this.redis.get(key);
     let cached: { rate: number | null; from: string; to: string; fetchedAt?: number } | null = null;
     if (cachedRaw) {
       try { cached = JSON.parse(cachedRaw); } catch (e) { cached = null; }

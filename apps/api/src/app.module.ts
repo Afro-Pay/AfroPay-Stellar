@@ -4,6 +4,7 @@ import { WalletModule } from './wallet/wallet.module';
 import { TransactionModule } from './transaction/transaction.module';
 import { AnchorModule } from './anchor/anchor.module';
 import { AuthModule } from './auth/auth.module';
+import { RateLimitModule } from './rate-limit/rate-limit.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { AuthModule } from './auth/auth.module';
     WalletModule,
     TransactionModule,
     AnchorModule,
+    RateLimitModule,
   ],
 })
 export class AppModule {}

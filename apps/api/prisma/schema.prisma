@@ -7,6 +7,14 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// Allowed lifecycle states for a Transaction.
+enum TransactionStatus {
+  PENDING
+  RETRYING
+  SUCCESS
+  FAILED
+}
+
 model User {
   id           String        @id @default(uuid())
   email        String        @unique
@@ -17,30 +25,49 @@ model User {
 }
 
 model Wallet {
-  id              String   @id @default(uuid())
-  userId          String   @unique
-  publicKey       String   @unique
+  id              String        @id @default(uuid())
+  /// Foreign key to the owning User. One wallet per user (enforced by @unique).
+  userId          String        @unique
+  /// Stellar public key – must be globally unique.
+  publicKey       String        @unique
   encryptedSecret String
-  createdAt       DateTime @default(now())
-  user            User     @relation(fields: [userId], references: [id])
+  createdAt       DateTime      @default(now())
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions    Transaction[]
 }
 
 model Transaction {
-  id             String   @id @default(uuid())
+  id             String            @id @default(uuid())
+  /// Foreign key to the User who initiated this transaction.
   userId         String
+  /// Foreign key to the Wallet used for this transaction.
+  walletId       String
+  /// Stellar destination public key – required, never null.
   destination    String
+  /// Transfer amount as a string to preserve decimal precision – required.
   amount         String
+  /// Stellar asset code (e.g. "XLM", "USDC") – required.
   assetCode      String
+  /// Asset issuer account; null for native XLM.
   assetIssuer    String?
+  /// Optional transaction memo.
   memo           String?
-  status         String   @default("PENDING")
-  stellarTxHash  String?
-  retryAttempts  Int      @default(0)
-  lastFailureReason String?
-  failedAt       DateTime?
+  /// Lifecycle state of this transaction.
+  status         TransactionStatus @default(PENDING)
+  /// Stellar transaction hash once submitted; unique across all confirmed txs.
+  stellarTxHash  String?           @unique
+  /// Fraud risk score from the analytics service.
   riskScore      Float?
-  flagged        Boolean  @default(false)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  user           User     @relation(fields: [userId], references: [id])
+  /// Whether this transaction has been flagged for review.
+  flagged        Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+
+  /// Speeds up per-user history queries (ordered by newest first).
+  @@index([userId, createdAt(sort: Desc)])
+  /// Speeds up per-wallet history queries.
+  @@index([walletId, createdAt(sort: Desc)])
 }

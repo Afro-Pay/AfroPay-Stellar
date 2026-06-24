@@ -11,6 +11,8 @@ export interface Wallet {
   createdAt: string;
 }
 
+export type TransactionStatus = 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED';
+
 export interface Balance {
   asset: string;
   balance: string;
@@ -19,12 +21,13 @@ export interface Balance {
 export interface Transaction {
   id: string;
   userId: string;
+  walletId: string;
   destination: string;
   amount: string;
   assetCode: string;
   assetIssuer?: string;
   memo?: string;
-  status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED';
+  status: TransactionStatus;
   stellarTxHash?: string;
   retryAttempts: number;
   lastFailureReason?: string;
