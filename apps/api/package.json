@@ -12,8 +12,14 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "testMatch": ["**/*.spec.ts"],
-    "moduleFileExtensions": ["ts", "js", "json"]
+    "testMatch": [
+      "**/*.spec.ts"
+    ],
+    "moduleFileExtensions": [
+      "ts",
+      "js",
+      "json"
+    ]
   },
   "dependencies": {
     "@nestjs/bull": "^10.0.1",
@@ -23,6 +29,7 @@
     "@nestjs/jwt": "^10.1.0",
     "@nestjs/passport": "^10.0.0",
     "@nestjs/platform-express": "^10.0.0",
+    "@nestjs/throttler": "^5.2.0",
     "@prisma/client": "^5.0.0",
     "axios": "^1.6.0",
     "bcrypt": "^5.1.0",

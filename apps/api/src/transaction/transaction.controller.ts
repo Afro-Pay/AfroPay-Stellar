@@ -1,6 +1,8 @@
 import { Body, Controller, Get, Param, Post, Request, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { SkipThrottle } from '@nestjs/throttler';
 import { TransactionService, SendTransferDto } from './transaction.service';
+import { AppThrottlerGuard } from '../common/guards/throttler.guard';
 import { IsOptional, IsString } from 'class-validator';
 
 class SendDto implements SendTransferDto {
@@ -17,6 +19,8 @@ export class TransactionController {
   constructor(private txService: TransactionService) {}
 
   @Post('send')
+  @UseGuards(AppThrottlerGuard)
+  @SkipThrottle({ login: true, register: true, wallet: true, anchor: true })
   send(@Request() req: any, @Body() dto: SendDto) {
     return this.txService.sendTransfer(req.user.userId, dto);
   }

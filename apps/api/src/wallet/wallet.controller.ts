@@ -1,6 +1,8 @@
 import { Controller, Get, Post, Body, UseGuards, Request } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { SkipThrottle } from '@nestjs/throttler';
 import { WalletService } from './wallet.service';
+import { AppThrottlerGuard } from '../common/guards/throttler.guard';
 import { IsString } from 'class-validator';
 
 class ImportWalletDto {
@@ -13,6 +15,8 @@ export class WalletController {
   constructor(private wallet: WalletService) {}
 
   @Post('create')
+  @UseGuards(AppThrottlerGuard)
+  @SkipThrottle({ login: true, register: true, transaction: true, anchor: true })
   create(@Request() req: any) {
     return this.wallet.createWallet(req.user.userId);
   }
@@ -28,6 +32,8 @@ export class WalletController {
   }
 
   @Post('import')
+  @UseGuards(AppThrottlerGuard)
+  @SkipThrottle({ login: true, register: true, transaction: true, anchor: true })
   import(@Request() req: any, @Body() dto: ImportWalletDto) {
     return this.wallet.importWallet(req.user.userId, dto.secretKey);
   }
