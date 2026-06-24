@@ -148,20 +148,19 @@ flowchart LR
   python -->|"risk decisions + alerts"| api
   anchor -->|"fiat on/off-ramp flows"| stellar
 ```
- 
-**Component responsibilities:**
- 
-| Component | Role |
-|---|---|
-| `apps/frontend` | Next.js UI — login, wallet views, send forms, transaction dashboard |
-| `apps/api` | NestJS gateway — auth, wallet APIs, transfer orchestration, anchor endpoints, Prisma ORM |
-| Redis / BullMQ | Async job queue — decouples API from Stellar settlement, retries on failure |
-| `services/rust-worker` | Consumes queued jobs, builds and submits Stellar transactions, reports hashes |
-| `services/python-analytics` | Evaluates fraud and risk signals from transaction history |
-| PostgreSQL | Source of truth — users, wallets, transfers, risk scores, audit trail |
-| Stellar / Horizon / anchors | Payment settlement, path-payment liquidity, fiat on/off-ramps |
- 
-See [docs/architecture.md](docs/architecture.md) for the full data-flow walkthrough.
+
+Component responsibilities:
+
+- **Frontend (`apps/frontend`)**: login, wallet views, send forms, balance cards, and transaction dashboards.
+- **API (`apps/api`)**: authentication, wallet APIs, transfer simulation, transaction orchestration, anchor endpoints, and persistence through Prisma.
+- **Redis / BullMQ**: decouples user-facing API calls from slower settlement work, supports retries, and stores short-lived workflow state.
+- **Rust worker (`services/rust-worker`)**: consumes queued jobs, prepares Stellar operations, submits transactions, and reports settlement state.
+- **Python analytics (`services/python-analytics`)**: evaluates fraud, risk, and monitoring signals from transaction history.
+- **PostgreSQL**: source of truth for users, wallets, transfers, simulation records, and audit-friendly transaction status.
+- **Stellar / anchors / Soroban**: final payment settlement, liquidity routing, and contract interactions.
+
+See [docs/architecture.md](docs/architecture.md) for a longer data-flow view.
+See [docs/deployment.md](docs/deployment.md) for production deployment, secret management, migration, staging, and rollback guidance.
  
 ---
  

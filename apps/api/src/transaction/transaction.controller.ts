@@ -17,6 +17,13 @@ export class TransactionController {
   constructor(private txService: TransactionService) {}
 
   @Post('send')
+  @RateLimit({
+    keyPrefix: 'transactions:send',
+    limit: 20,
+    windowMs: 60_000,
+    limitEnv: 'PUBLIC_API_RATE_LIMIT_MAX',
+    windowMsEnv: 'PUBLIC_API_RATE_LIMIT_WINDOW_MS',
+  })
   send(@Request() req: any, @Body() dto: SendDto) {
     return this.txService.sendTransfer(req.user.userId, dto);
   }

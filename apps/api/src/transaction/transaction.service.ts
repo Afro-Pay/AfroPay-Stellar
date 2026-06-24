@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { PrismaService } from '../prisma/prisma.service';
+import { TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
 
 export interface SendTransferDto {
   destinationPublicKey: string;
@@ -19,9 +20,14 @@ export class TransactionService {
   ) {}
 
   async sendTransfer(userId: string, dto: SendTransferDto) {
+    // Resolve the wallet FK – every transfer must originate from the user's wallet.
+    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+    if (!wallet) throw new NotFoundException('Wallet not found for user');
+
     const tx = await this.prisma.transaction.create({
       data: {
         userId,
+        walletId: wallet.id,
         destination: dto.destinationPublicKey,
         amount: dto.amount,
         assetCode: dto.assetCode,
@@ -31,10 +37,7 @@ export class TransactionService {
       },
     });
 
-    await this.txQueue.add('process', { txId: tx.id, userId, ...dto }, {
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 2000 },
-    });
+    await this.txQueue.add('process', { txId: tx.id, userId, ...dto }, TRANSACTION_QUEUE_OPTIONS);
 
     return { txId: tx.id, status: 'PENDING' };
   }

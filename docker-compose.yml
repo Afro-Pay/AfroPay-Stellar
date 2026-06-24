@@ -1,5 +1,19 @@
 version: '3.9'
 
+# =============================================================================
+# AfroPay-Stellar — Docker Compose (Local Development)
+# =============================================================================
+# ⚠ SECURITY NOTES ⚠
+# 1. The secrets below are DEVELOPMENT defaults. Never use in production.
+# 2. For production, use a secrets manager (Vault, AWS Secrets Manager, etc.)
+#    or a .env file with restricted permissions (chmod 600).
+# 3. PostgreSQL and Redis ports are exposed to the host for convenience.
+#    In production, remove `ports` or bind to 127.0.0.1 only.
+# 4. Generate real secrets before any public deployment:
+#    - JWT_SECRET: openssl rand -base64 48
+#    - ENCRYPTION_KEY: openssl rand -hex 32
+# =============================================================================
+
 x-logging: &default-logging
   driver: "json-file"
   options:
@@ -43,6 +57,8 @@ services:
     ports:
       - '3001:3001'
     environment:
+      NODE_ENV: development
+      PORT: 3001
       DATABASE_URL: postgresql://remitx:remitx@postgres:5432/remitx
       REDIS_URL: redis://redis:6379
       JWT_SECRET: change_me_in_production
@@ -57,7 +73,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"] # Note: Ensure your API exposes a GET /health endpoint, or change to a valid route
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 15s
       timeout: 10s
       retries: 3
@@ -74,7 +90,7 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/"] # Pings the frontend landing page
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -96,7 +112,7 @@ services:
     ports:
       - '8000:8000'
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"] # Note: Ensure python-analytics has a /health or fallback endpoint
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
       timeout: 5s
       retries: 3

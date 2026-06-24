@@ -70,68 +70,54 @@ export default function Login() {
       <form onSubmit={submit} className="bg-gray-900 p-8 rounded-xl w-full max-w-sm space-y-4">
         <h1 className="text-2xl font-bold text-center">RemitX</h1>
         <p className="text-center text-gray-400">{isRegister ? 'Create account' : 'Sign in'}</p>
-        <div id={authErrorId} role="alert" aria-live="assertive" className="min-h-5 text-sm text-red-400">
-          {authError}
-        </div>
-        <div className="space-y-2">
-          <label htmlFor={emailId} className="block text-sm font-medium text-gray-200">
+        {error && (
+          <p id="auth-error" className="text-red-400 text-sm" role="alert">
+            {error}
+          </p>
+        )}
+        <div>
+          <label htmlFor="auth-email" className="block text-sm font-medium text-gray-300 mb-1">
             Email
           </label>
           <input
-            id={emailId}
-            className="w-full bg-gray-800 rounded-lg p-3 outline-none ring-1 ring-transparent transition focus:ring-indigo-500"
+            id="auth-email"
+            name="email"
+            className="w-full bg-gray-800 rounded-lg p-3 outline-none focus:ring-2 focus:ring-indigo-500"
             type="email"
-            placeholder="Email"
             value={email}
-            onChange={(e) => {
-              setEmail(e.target.value);
-              setAuthError('');
-            }}
-            onBlur={() => validateField('email')}
-            aria-invalid={Boolean(fieldErrors.email)}
-            aria-describedby={fieldErrors.email ? emailErrorId : undefined}
+            onChange={(e) => setEmail(e.target.value)}
             autoComplete="email"
+            aria-describedby={error ? 'auth-error' : undefined}
+            required
           />
-          <p id={emailErrorId} className="min-h-5 text-sm text-red-400">
-            {fieldErrors.email}
-          </p>
         </div>
-        <div className="space-y-2">
-          <label htmlFor={passwordId} className="block text-sm font-medium text-gray-200">
-            Password
+        <div>
+          <label htmlFor="auth-password" className="block text-sm font-medium text-gray-300 mb-1">
+            Password <span className="text-gray-500">(minimum 8 characters)</span>
           </label>
           <input
-            id={passwordId}
-            className="w-full bg-gray-800 rounded-lg p-3 outline-none ring-1 ring-transparent transition focus:ring-indigo-500"
+            id="auth-password"
+            name="password"
+            className="w-full bg-gray-800 rounded-lg p-3 outline-none focus:ring-2 focus:ring-indigo-500"
             type="password"
-            placeholder="Password"
             value={password}
-            onChange={(e) => {
-              setPassword(e.target.value);
-              setAuthError('');
-            }}
-            onBlur={() => validateField('password')}
-            aria-invalid={Boolean(fieldErrors.password)}
-            aria-describedby={fieldErrors.password ? passwordErrorId : undefined}
+            onChange={(e) => setPassword(e.target.value)}
             autoComplete={isRegister ? 'new-password' : 'current-password'}
+            aria-describedby={error ? 'auth-error' : undefined}
+            required
+            minLength={8}
           />
-          <p id={passwordErrorId} className="min-h-5 text-sm text-red-400">
-            {fieldErrors.password}
-          </p>
         </div>
-        <button className="w-full bg-indigo-600 hover:bg-indigo-700 rounded-lg p-3 font-semibold">
+        <button className="w-full bg-indigo-600 hover:bg-indigo-700 rounded-lg p-3 font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-300">
           {isRegister ? 'Register' : 'Login'}
         </button>
-        <p
-          className="text-center text-sm text-gray-400 cursor-pointer"
-          onClick={() => {
-            setIsRegister(!isRegister);
-            setFieldErrors({});
-            setAuthError('');
-          }}
+        <button
+          type="button"
+          className="w-full text-center text-sm text-gray-400 hover:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded"
+          onClick={() => setIsRegister(!isRegister)}
         >
           {isRegister ? 'Already have an account? Login' : "Don't have an account? Register"}
-        </p>
+        </button>
       </form>
     </main>
   );
