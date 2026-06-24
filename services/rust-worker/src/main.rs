@@ -1,7 +1,9 @@
-use stellar_sdk::crypto::KeyPair;
-use sha2::{Sha256, Digest};
-use std::env;
-use std::fs;
+mod stellar;
+mod trustline;
+mod queue;
+mod models;
+mod metrics;
+mod env;
 
 // Load master seed from environment or file
 fn get_master_seed() -> Result<String, String> {
@@ -27,17 +29,12 @@ fn get_master_seed() -> Result<String, String> {
     }
 }
 
-// Derive deterministic keypair from seed
-fn derive_keypair(seed: &str, purpose: Option<&str>) -> KeyPair {
-    let mut hasher = Sha256::new();
-    hasher.update(seed.as_bytes());
-    if let Some(p) = purpose {
-        hasher.update(p.as_bytes());
-    }
-    let result = hasher.finalize();
-    let seed_bytes: [u8; 32] = result.into();
-    KeyPair::from_seed(&seed_bytes)
-}
+    // Fail fast if required environment variables are missing
+    env::validate_env();
+
+    info!("Rust Worker starting...");
+    // Start metrics server in background
+    tokio::spawn(async move { metrics::serve().await });
 
 fn main() {
     println!("🚀 Starting Rust Worker with Deterministic Keypairs");
