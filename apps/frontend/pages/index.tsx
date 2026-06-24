@@ -11,15 +11,20 @@ export default function Dashboard() {
   const { balances, transactions, isLoading, error, fetchBalances, fetchTransactions } = useWalletStore();
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) { router.push('/login'); return; }
+    const token = localStorage.getItem("token");
+    if (!token) {
+      router.push("/login");
+      return;
+    }
     fetchBalances();
     fetchTransactions();
   }, []);
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white p-4 max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6">RemitX Dashboard</h1>
+    <main className="p-4 max-w-3xl mx-auto">
+      <h1 className="text-2xl font-bold mb-6 text-gray-900 dark:text-white">
+        RemitX Dashboard
+      </h1>
 
       {error && (
         <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded-xl text-red-300 text-sm">
@@ -45,7 +50,9 @@ export default function Dashboard() {
       </section>
 
       <section className="mb-6">
-        <h2 className="text-lg font-semibold mb-2">Send Money</h2>
+        <h2 className="text-lg font-semibold mb-2 text-gray-900 dark:text-white">
+          Send Money
+        </h2>
         <SendForm />
       </section>
 

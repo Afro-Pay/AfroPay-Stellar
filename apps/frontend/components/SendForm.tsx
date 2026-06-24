@@ -1,23 +1,28 @@
-import { useState } from 'react';
-import { useWalletStore } from '../store/walletStore';
+import {useState} from "react";
+import {useWalletStore} from "../store/walletStore";
 
-const ASSETS = ['XLM', 'USDC', 'NGN'];
+const ASSETS = ["XLM", "USDC", "NGN"];
 
 export default function SendForm() {
-  const { sendTransfer, fetchBalances, fetchTransactions } = useWalletStore();
-  const [form, setForm] = useState({ destinationPublicKey: '', amount: '', assetCode: 'XLM', memo: '' });
-  const [status, setStatus] = useState('');
+  const {sendTransfer, fetchBalances, fetchTransactions} = useWalletStore();
+  const [form, setForm] = useState({
+    destinationPublicKey: "",
+    amount: "",
+    assetCode: "XLM",
+    memo: "",
+  });
+  const [status, setStatus] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setStatus('Sending...');
+    setStatus("Sending...");
     try {
       await sendTransfer(form);
-      setStatus('Transaction submitted!');
+      setStatus("Transaction submitted!");
       fetchBalances();
       fetchTransactions();
     } catch {
-      setStatus('Failed to send. Please try again.');
+      setStatus("Failed to send. Please try again.");
     }
   };
 
