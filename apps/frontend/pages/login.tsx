@@ -1,23 +1,67 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useRouter } from 'next/router';
 import api, { storeSessionTokens } from '../lib/api';
 
+type FieldErrors = {
+  email?: string;
+  password?: string;
+};
+
+function validateLoginForm(email: string, password: string): FieldErrors {
+  const nextErrors: FieldErrors = {};
+  const trimmedEmail = email.trim();
+
+  if (!trimmedEmail) {
+    nextErrors.email = 'Email is required.';
+  } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+    nextErrors.email = 'Enter a valid email address.';
+  }
+
+  if (!password) {
+    nextErrors.password = 'Password is required.';
+  }
+
+  return nextErrors;
+}
+
 export default function Login() {
   const router = useRouter();
+  const emailId = useId();
+  const passwordId = useId();
+  const emailErrorId = useId();
+  const passwordErrorId = useId();
+  const authErrorId = useId();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [authError, setAuthError] = useState('');
   const [isRegister, setIsRegister] = useState(false);
+
+  const validateField = (field: 'email' | 'password', currentEmail = email, currentPassword = password) => {
+    const nextErrors = validateLoginForm(currentEmail, currentPassword);
+    setFieldErrors((previous) => ({ ...previous, [field]: nextErrors[field] }));
+    if (field === 'email') {
+      setAuthError('');
+    }
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const nextErrors = validateLoginForm(email, password);
+    setFieldErrors(nextErrors);
+
+    if (Object.keys(nextErrors).length > 0) {
+      setAuthError('');
+      return;
+    }
+
     try {
       const endpoint = isRegister ? '/auth/register' : '/auth/login';
       const { data } = await api.post(endpoint, { email, password });
       storeSessionTokens(data);
       router.push('/');
     } catch {
-      setError('Authentication failed. Check your credentials.');
+      setAuthError('Invalid email or password.');
     }
   };
 
