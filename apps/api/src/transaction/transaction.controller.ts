@@ -1,8 +1,7 @@
 import { Body, Controller, Get, Param, Post, Request, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { TransactionService, SendTransferDto } from './transaction.service';
 import { IsOptional, IsString } from 'class-validator';
-import { RateLimit } from '../rate-limit/rate-limit.decorator';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 class SendDto implements SendTransferDto {
   @IsString() destinationPublicKey: string;
@@ -12,7 +11,7 @@ class SendDto implements SendTransferDto {
   @IsOptional() @IsString() memo?: string;
 }
 
-@UseGuards(AuthGuard('jwt'))
+@UseGuards(JwtAuthGuard)
 @Controller('transactions')
 export class TransactionController {
   constructor(private txService: TransactionService) {}

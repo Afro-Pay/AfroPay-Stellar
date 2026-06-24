@@ -30,6 +30,11 @@ export class WalletController {
     return this.wallet.getBalances(req.user.userId);
   }
 
+  @Get('reconcile')
+  reconcile(@Request() req: any) {
+    return this.wallet.reconcileWallet(req.user.userId);
+  }
+
   @Get('export')
   export(@Request() req: any) {
     return this.wallet.exportWallet(req.user.userId);

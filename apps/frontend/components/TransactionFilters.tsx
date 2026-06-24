@@ -16,9 +16,13 @@ export default function TransactionFilters({
   dateRangeFilter, setDateRangeFilter
 }: FiltersProps) {
   return (
-    <div className="flex flex-col md:flex-row gap-4 mb-6">
+    <fieldset className="flex flex-col md:flex-row gap-4 mb-6">
+      <legend className="sr-only">Filter transactions</legend>
       <div className="flex-1 relative">
-         <select 
+         <label htmlFor="transaction-date-range" className="sr-only">Date range</label>
+         <select
+           id="transaction-date-range"
+           name="dateRange"
            value={dateRangeFilter}
            onChange={(e) => setDateRangeFilter(e.target.value)}
            className="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-300 focus:outline-none focus:border-indigo-500 appearance-none"
@@ -27,11 +31,14 @@ export default function TransactionFilters({
             <option value="7d">Last 7 Days</option>
             <option value="30d">Last 30 Days</option>
          </select>
-         <Calendar className="absolute right-3 top-3.5 text-gray-500 w-4 h-4 pointer-events-none" />
+         <Calendar aria-hidden="true" className="absolute right-3 top-3.5 text-gray-500 w-4 h-4 pointer-events-none" />
       </div>
 
       <div className="flex-1 relative">
-         <select 
+         <label htmlFor="transaction-currency" className="sr-only">Currency</label>
+         <select
+           id="transaction-currency"
+           name="currency"
            value={currencyFilter}
            onChange={(e) => setCurrencyFilter(e.target.value)}
            className="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-300 focus:outline-none focus:border-indigo-500 appearance-none"
@@ -41,11 +48,14 @@ export default function TransactionFilters({
             <option value="XLM">XLM</option>
             <option value="NGN">NGN</option>
          </select>
-         <Filter className="absolute right-3 top-3.5 text-gray-500 w-4 h-4 pointer-events-none" />
+         <Filter aria-hidden="true" className="absolute right-3 top-3.5 text-gray-500 w-4 h-4 pointer-events-none" />
       </div>
 
       <div className="flex-1 relative">
-         <select 
+         <label htmlFor="transaction-status" className="sr-only">Status</label>
+         <select
+           id="transaction-status"
+           name="status"
            value={statusFilter}
            onChange={(e) => setStatusFilter(e.target.value)}
            className="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-300 focus:outline-none focus:border-indigo-500 appearance-none"
@@ -56,8 +66,8 @@ export default function TransactionFilters({
             <option value="FAILED">Failed</option>
             <option value="RETRYING">Retrying</option>
          </select>
-         <Filter className="absolute right-3 top-3.5 text-gray-500 w-4 h-4 pointer-events-none" />
+         <Filter aria-hidden="true" className="absolute right-3 top-3.5 text-gray-500 w-4 h-4 pointer-events-none" />
       </div>
-    </div>
+    </fieldset>
   );
 }

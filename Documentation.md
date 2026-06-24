@@ -88,14 +88,7 @@ src/
 
 # Environment Variables
 
-Create a `.env.local` file:
-
-```env
-NEXT_PUBLIC_STELLAR_NETWORK=testnet
-NEXT_PUBLIC_RPC_URL=your_rpc_url
-NEXT_PUBLIC_HORIZON_URL=your_horizon_url
-NEXT_PUBLIC_WALLETCONNECT_ID=your_walletconnect_id
-```
+See [docs/environment-variables.md](docs/environment-variables.md) for the full reference of all environment variables used across all services. Copy `.env.example` to `.env` to get started.
 
 ---
 
