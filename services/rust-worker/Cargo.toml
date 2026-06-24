@@ -24,3 +24,8 @@ dotenv = "0.15"
 prometheus = "0.14"
 warp = "0.3"
 once_cell = "1"
+
+[dependencies]
+stellar-sdk = "0.4"
+sha2 = "0.10"
+
