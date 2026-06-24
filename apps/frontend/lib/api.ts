@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { env } from './env';
 
 const baseURL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const api = axios.create({ baseURL });

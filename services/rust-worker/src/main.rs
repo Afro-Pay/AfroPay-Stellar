@@ -3,6 +3,7 @@ mod trustline;
 mod queue;
 mod models;
 mod metrics;
+mod env;
 
 use anyhow::Result;
 use tracing::info;
@@ -12,7 +13,10 @@ async fn main() -> Result<()> {
     dotenv::dotenv().ok();
     tracing_subscriber::fmt::init();
 
-    info!("RemitX Rust Worker starting...");
+    // Fail fast if required environment variables are missing
+    env::validate_env();
+
+    info!("Rust Worker starting...");
     // Start metrics server in background
     tokio::spawn(async move { metrics::serve().await });
 

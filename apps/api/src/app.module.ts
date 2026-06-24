@@ -8,7 +8,14 @@ import { RateLimitModule } from './rate-limit/rate-limit.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: envValidationSchema,
+      validationOptions: {
+        abortEarly: false,
+        allowUnknown: true,
+      },
+    }),
     AuthModule,
     WalletModule,
     TransactionModule,
