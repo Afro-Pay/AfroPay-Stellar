@@ -52,7 +52,29 @@ export class TransactionService {
     });
   }
 
+  async getTransactionsByWallet(walletId: string) {
+    return this.prisma.transaction.findMany({
+      where: { walletId },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+  }
+
   async getTransaction(txId: string) {
     return this.prisma.transaction.findUnique({ where: { id: txId } });
+  }
+
+  async updateTransactionStatus(
+    txId: string,
+    status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED',
+    stellarTxHash?: string,
+  ) {
+    return this.prisma.transaction.update({
+      where: { id: txId },
+      data: {
+        status,
+        ...(stellarTxHash ? { stellarTxHash } : {}),
+      },
+    });
   }
 }
