@@ -8,21 +8,17 @@ export class AnchorController {
   constructor(private anchor: AnchorService) {}
 
   @Get('deposit')
-  deposit(@Query('asset') asset: string, @Query('account') account: string) {
-    return this.anchor.getDepositInfo(asset, account);
+  deposit(@Query() query: DepositQueryDto) {
+    return this.anchor.getDepositInfo(query.asset, query.account);
   }
 
   @Get('withdraw')
-  withdraw(
-    @Query('asset') asset: string,
-    @Query('account') account: string,
-    @Query('amount') amount: string,
-  ) {
-    return this.anchor.getWithdrawInfo(asset, account, amount);
+  withdraw(@Query() query: WithdrawQueryDto) {
+    return this.anchor.getWithdrawInfo(query.asset, query.account, query.amount);
   }
 
   @Get('fx-rate')
-  fxRate(@Query('from') from: string, @Query('to') to: string) {
-    return this.anchor.getFxRate(from, to);
+  fxRate(@Query() query: FxRateQueryDto) {
+    return this.anchor.getFxRate(query.from, query.to);
   }
 }

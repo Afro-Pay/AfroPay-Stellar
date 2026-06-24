@@ -280,8 +280,8 @@ Get instructions for depositing fiat to receive a Stellar asset.
 **Endpoint:** `GET /anchor/deposit`
 
 **Query Parameters:**
-- `asset` (string): The asset to deposit (e.g., 'USDC').
-- `account` (string): The user's Stellar public key.
+- `asset` (string): The asset to deposit. Allowed values: `USDC`, `NGN`.
+- `account` (string): The user's Stellar public key. Must be a valid Stellar public key (`G...`).
 
 **Example Request:**
 `GET /anchor/deposit?asset=USDC&account=GBX...XYZ`
@@ -301,9 +301,9 @@ Get instructions for withdrawing a Stellar asset to fiat.
 **Endpoint:** `GET /anchor/withdraw`
 
 **Query Parameters:**
-- `asset` (string): The asset to withdraw.
-- `account` (string): The user's Stellar public key.
-- `amount` (string): The amount to withdraw.
+- `asset` (string): The asset to withdraw. Allowed values: `USDC`, `NGN`.
+- `account` (string): The user's Stellar public key. Must be a valid Stellar public key (`G...`).
+- `amount` (string): The amount to withdraw as a decimal string.
 
 **Example Request:**
 `GET /anchor/withdraw?asset=USDC&account=GBX...XYZ&amount=50.00`
@@ -324,8 +324,8 @@ Get the foreign exchange rate between two assets.
 **Endpoint:** `GET /anchor/fx-rate`
 
 **Query Parameters:**
-- `from` (string): The source asset.
-- `to` (string): The target asset.
+- `from` (string): The source asset. Allowed values: `USD`, `NGN`, `XLM`.
+- `to` (string): The target asset. Allowed values: `USD`, `NGN`, `XLM`.
 
 **Example Request:**
 `GET /anchor/fx-rate?from=USD&to=NGN`
