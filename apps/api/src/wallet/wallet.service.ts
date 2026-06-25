@@ -1,13 +1,20 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { Keypair, Horizon } from 'stellar-sdk';
-import * as crypto from 'crypto';
-import { KMSClient, EncryptCommand, DecryptCommand } from '@aws-sdk/client-kms';
+import { Injectable, NotFoundException } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { Keypair, Horizon } from "stellar-sdk";
+import * as crypto from "crypto";
 
-const HORIZON_URL = process.env.STELLAR_HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
+const HORIZON_URL =
+  process.env.STELLAR_HORIZON_URL ?? "https://horizon-testnet.stellar.org";
 const server = new Horizon.Server(HORIZON_URL);
 
-type ReconciliationSeverity = 'info' | 'warning' | 'critical';
+export class AuthTagMismatchError extends Error {
+  constructor(message = "AuthTagMismatch") {
+    super(message);
+    this.name = "AuthTagMismatch";
+  }
+}
+
+type ReconciliationSeverity = "info" | "warning" | "critical";
 
 interface ReconciliationDiscrepancy {
   type: string;
@@ -28,23 +35,14 @@ interface ReconciliationAsset {
 
 @Injectable()
 export class WalletService {
-  private readonly kmsClient: KMSClient | null;
-  private readonly kmsKeyId: string | null;
-
-  constructor(private prisma: PrismaService) {
-    this.kmsClient =
-      process.env.KMS_KEY_ID && process.env.AWS_REGION
-        ? new KMSClient({ region: process.env.AWS_REGION })
-        : null;
-    this.kmsKeyId = process.env.KMS_KEY_ID ?? null;
-  }
+  constructor(private prisma: PrismaService) {}
 
   async createWallet(userId: string) {
     const keypair = Keypair.random();
-    const { encryptedSecret, encryptedDek, kmsKeyId } = await this.encryptWalletSecret(keypair.secret());
+    const encryptedSecret = this.encrypt(keypair.secret(), userId);
 
     const wallet = await this.prisma.wallet.create({
-      data: { userId, publicKey: keypair.publicKey(), encryptedSecret, encryptedDek, kmsKeyId },
+      data: { userId, publicKey: keypair.publicKey(), encryptedSecret },
     });
 
     return { publicKey: wallet.publicKey };
@@ -52,22 +50,22 @@ export class WalletService {
 
   async getBalances(userId: string) {
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
+    if (!wallet) throw new NotFoundException("Wallet not found");
 
     const account = await this.loadAccount(wallet.publicKey);
     return account.balances.map((b: any) => ({
-      asset: b.asset_type === 'native' ? 'XLM' : b.asset_code,
+      asset: b.asset_type === "native" ? "XLM" : b.asset_code,
       balance: b.balance,
     }));
   }
 
   async reconcileWallet(userId: string) {
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
+    if (!wallet) throw new NotFoundException("Wallet not found");
 
     const transactions = await this.prisma.transaction.findMany({
       where: { userId },
-      orderBy: { updatedAt: 'desc' },
+      orderBy: { updatedAt: "desc" },
       take: 100,
     });
 
@@ -80,27 +78,44 @@ export class WalletService {
     } catch (error) {
       if (this.isHorizonNotFound(error)) {
         discrepancies.push({
-          type: 'ON_CHAIN_ACCOUNT_NOT_FOUND',
-          severity: 'critical',
-          message: 'Stored wallet public key was not found on Horizon.',
+          type: "ON_CHAIN_ACCOUNT_NOT_FOUND",
+          severity: "critical",
+          message: "Stored wallet public key was not found on Horizon.",
           details: { publicKey: wallet.publicKey },
         });
 
-        return this.buildReconciliationReport(wallet, expectedAssets, [], transactions, discrepancies, null);
+        return this.buildReconciliationReport(
+          wallet,
+          expectedAssets,
+          [],
+          transactions,
+          discrepancies,
+          null,
+        );
       }
 
       throw error;
     }
 
-    const onChainAssets = this.assetsFromHorizonBalances(account.balances ?? []);
-    const onChainAssetKeys = new Set(onChainAssets.map((asset) => this.assetKey(asset.asset, asset.assetIssuer)));
+    const onChainAssets = this.assetsFromHorizonBalances(
+      account.balances ?? [],
+    );
+    const onChainAssetKeys = new Set(
+      onChainAssets.map((asset) =>
+        this.assetKey(asset.asset, asset.assetIssuer),
+      ),
+    );
 
     for (const expectedAsset of expectedAssets) {
-      if (expectedAsset.asset === 'XLM') continue;
-      if (!onChainAssetKeys.has(this.assetKey(expectedAsset.asset, expectedAsset.assetIssuer))) {
+      if (expectedAsset.asset === "XLM") continue;
+      if (
+        !onChainAssetKeys.has(
+          this.assetKey(expectedAsset.asset, expectedAsset.assetIssuer),
+        )
+      ) {
         discrepancies.push({
-          type: 'MISSING_TRUSTLINE',
-          severity: 'warning',
+          type: "MISSING_TRUSTLINE",
+          severity: "warning",
           message: `Application activity references ${expectedAsset.asset}, but the wallet has no matching on-chain trustline.`,
           asset: expectedAsset.asset,
           assetIssuer: expectedAsset.assetIssuer,
@@ -112,12 +127,18 @@ export class WalletService {
       }
     }
 
-    const lastModifiedTime = account.last_modified_time ? new Date(account.last_modified_time) : null;
-    if (lastModifiedTime && transactions.some((tx: any) => new Date(tx.updatedAt) > lastModifiedTime)) {
+    const lastModifiedTime = account.last_modified_time
+      ? new Date(account.last_modified_time)
+      : null;
+    if (
+      lastModifiedTime &&
+      transactions.some((tx: any) => new Date(tx.updatedAt) > lastModifiedTime)
+    ) {
       discrepancies.push({
-        type: 'STALE_LEDGER_STATE',
-        severity: 'info',
-        message: 'Application transactions were updated after the account last changed on-chain.',
+        type: "STALE_LEDGER_STATE",
+        severity: "info",
+        message:
+          "Application transactions were updated after the account last changed on-chain.",
         details: {
           horizonLastModifiedTime: account.last_modified_time,
           latestApplicationTransactionAt: transactions[0]?.updatedAt,
@@ -137,30 +158,27 @@ export class WalletService {
 
   async exportWallet(userId: string) {
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
-
+    if (!wallet) throw new NotFoundException("Wallet not found");
     return {
       publicKey: wallet.publicKey,
-      secretKey: await this.decryptWalletSecret(wallet),
+      secretKey: this.decrypt(wallet.encryptedSecret, userId),
     };
   }
 
   async importWallet(userId: string, secretKey: string) {
     const keypair = Keypair.fromSecret(secretKey);
-    const { encryptedSecret, encryptedDek, kmsKeyId } = await this.encryptWalletSecret(secretKey);
-
+    const encryptedSecret = this.encrypt(secretKey, userId);
     return this.prisma.wallet.upsert({
       where: { userId },
-      update: { publicKey: keypair.publicKey(), encryptedSecret, encryptedDek, kmsKeyId },
-      create: { userId, publicKey: keypair.publicKey(), encryptedSecret, encryptedDek, kmsKeyId },
+      update: { publicKey: keypair.publicKey(), encryptedSecret },
+      create: { userId, publicKey: keypair.publicKey(), encryptedSecret },
     });
   }
 
   async getKeypair(userId: string): Promise<Keypair> {
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
-
-    return Keypair.fromSecret(await this.decryptWalletSecret(wallet));
+    if (!wallet) throw new NotFoundException("Wallet not found");
+    return Keypair.fromSecret(this.decrypt(wallet.encryptedSecret, userId));
   }
 
   private async loadAccount(publicKey: string) {
@@ -169,10 +187,11 @@ export class WalletService {
 
   private assetsFromHorizonBalances(balances: any[]): ReconciliationAsset[] {
     return balances.map((balance) => ({
-      asset: balance.asset_type === 'native' ? 'XLM' : balance.asset_code,
-      assetIssuer: balance.asset_type === 'native' ? null : balance.asset_issuer ?? null,
+      asset: balance.asset_type === "native" ? "XLM" : balance.asset_code,
+      assetIssuer:
+        balance.asset_type === "native" ? null : (balance.asset_issuer ?? null),
       balance: balance.balance,
-      trustline: balance.asset_type !== 'native',
+      trustline: balance.asset_type !== "native",
       limit: balance.limit,
     }));
   }
@@ -190,7 +209,7 @@ export class WalletService {
     >();
 
     for (const tx of transactions) {
-      const asset = tx.assetCode || 'XLM';
+      const asset = tx.assetCode || "XLM";
       const assetIssuer = tx.assetIssuer ?? null;
       const key = this.assetKey(asset, assetIssuer);
       const current = assets.get(key) ?? {
@@ -203,8 +222,13 @@ export class WalletService {
 
       current.transactionCount += 1;
       current.statuses[tx.status] = (current.statuses[tx.status] ?? 0) + 1;
-      const updatedAt = tx.updatedAt ? new Date(tx.updatedAt).toISOString() : null;
-      if (updatedAt && (!current.lastTransactionAt || updatedAt > current.lastTransactionAt)) {
+      const updatedAt = tx.updatedAt
+        ? new Date(tx.updatedAt).toISOString()
+        : null;
+      if (
+        updatedAt &&
+        (!current.lastTransactionAt || updatedAt > current.lastTransactionAt)
+      ) {
         current.lastTransactionAt = updatedAt;
       }
 
@@ -216,15 +240,17 @@ export class WalletService {
 
   private buildReconciliationReport(
     wallet: any,
-    expectedAssets: ReturnType<WalletService['expectedAssetsFromTransactions']>,
+    expectedAssets: ReturnType<WalletService["expectedAssetsFromTransactions"]>,
     onChainAssets: ReconciliationAsset[],
     transactions: any[],
     discrepancies: ReconciliationDiscrepancy[],
     account: any,
   ) {
-    const criticalCount = discrepancies.filter((item) => item.severity === 'critical').length;
+    const criticalCount = discrepancies.filter(
+      (item) => item.severity === "critical",
+    ).length;
     return {
-      status: discrepancies.length === 0 ? 'in_sync' : 'drift_detected',
+      status: discrepancies.length === 0 ? "in_sync" : "drift_detected",
       checkedAt: new Date().toISOString(),
       wallet: {
         id: wallet.id,
@@ -246,135 +272,96 @@ export class WalletService {
       summary: {
         discrepancyCount: discrepancies.length,
         criticalCount,
-        missingTrustlineCount: discrepancies.filter((item) => item.type === 'MISSING_TRUSTLINE').length,
+        missingTrustlineCount: discrepancies.filter(
+          (item) => item.type === "MISSING_TRUSTLINE",
+        ).length,
       },
       discrepancies,
     };
   }
 
   private assetKey(asset: string, issuer: string | null | undefined) {
-    return `${asset}:${issuer ?? 'native'}`;
+    return `${asset}:${issuer ?? "native"}`;
   }
 
   private isHorizonNotFound(error: any) {
-    return error?.response?.status === 404 || error?.status === 404 || error?.name === 'NotFoundError';
-  }
-
-  private async decryptWalletSecret(wallet: any): Promise<string> {
-    if (wallet.encryptedDek) {
-      const dek = await this.decryptDekFromKms(wallet.encryptedDek);
-      return this.decryptSecretWithDek(wallet.encryptedSecret, dek);
-    }
-
-    const secret = this.decryptLegacySecret(wallet.encryptedSecret);
-    if (this.kmsClient) {
-      await this.reencryptWalletWithKms(wallet.id, secret);
-    }
-
-    return secret;
-  }
-
-  private async reencryptWalletWithKms(walletId: string, secret: string) {
-    const { encryptedSecret, encryptedDek, kmsKeyId } = await this.encryptWalletSecret(secret);
-    await this.prisma.wallet.update({
-      where: { id: walletId },
-      data: { encryptedSecret, encryptedDek, kmsKeyId },
-    });
-  }
-
-  private async encryptWalletSecret(secretKey: string) {
-    if (this.kmsClient && this.kmsKeyId) {
-      const dek = crypto.randomBytes(32);
-      return {
-        encryptedSecret: this.encryptSecretWithDek(secretKey, dek),
-        encryptedDek: await this.encryptDekWithKms(dek),
-        kmsKeyId: this.kmsKeyId,
-      };
-    }
-
-    return {
-      encryptedSecret: this.encryptLegacySecret(secretKey),
-      encryptedDek: null,
-      kmsKeyId: null,
-    };
-  }
-
-  private async encryptDekWithKms(dek: Buffer): Promise<string> {
-    if (!this.kmsClient || !this.kmsKeyId) {
-      throw new Error('Missing KMS configuration for encryption');
-    }
-
-    const result = await this.kmsClient.send(
-      new EncryptCommand({
-        KeyId: this.kmsKeyId,
-        Plaintext: dek,
-      }),
+    return (
+      error?.response?.status === 404 ||
+      error?.status === 404 ||
+      error?.name === "NotFoundError"
     );
-
-    if (!result.CiphertextBlob) {
-      throw new Error('KMS failed to encrypt the data key');
-    }
-
-    return Buffer.from(result.CiphertextBlob).toString('base64');
   }
 
-  private async decryptDekFromKms(encryptedDek: string): Promise<Buffer> {
-    if (!this.kmsClient) {
-      throw new Error('Missing KMS configuration for decryption');
+  private getMasterKey() {
+    const configuredKey = process.env.ENCRYPTION_KEY;
+    if (!configuredKey) {
+      throw new Error("ENCRYPTION_KEY is required");
     }
 
-    const result = await this.kmsClient.send(
-      new DecryptCommand({
-        CiphertextBlob: Buffer.from(encryptedDek, 'base64'),
-      }),
+    return Buffer.from(configuredKey, "hex");
+  }
+
+  private deriveUserKey(userId: string) {
+    return crypto.hkdfSync(
+      "sha256",
+      this.getMasterKey(),
+      Buffer.alloc(16),
+      Buffer.from(userId, "utf8"),
+      32,
     );
-
-    if (!result.Plaintext) {
-      throw new Error('KMS failed to decrypt the data key');
-    }
-
-    return Buffer.from(result.Plaintext);
   }
 
-  private encryptSecretWithDek(secretKey: string, dek: Buffer): string {
+  private encrypt(text: string, userId: string): string {
     const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', dek, iv);
-    const encrypted = Buffer.concat([cipher.update(secretKey, 'utf8'), cipher.final()]);
+    const cipher = crypto.createCipheriv(
+      "aes-256-gcm",
+      this.deriveUserKey(userId),
+      iv,
+    );
+    const ciphertext = Buffer.concat([
+      cipher.update(text, "utf8"),
+      cipher.final(),
+    ]);
     const authTag = cipher.getAuthTag();
 
-    return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
+    return `${iv.toString("hex")}:${authTag.toString("hex")}:${ciphertext.toString("hex")}`;
   }
 
-  private decryptSecretWithDek(data: string, dek: Buffer): string {
-    const [ivHex, authTagHex, encrypted] = data.split(':');
-    const iv = Buffer.from(ivHex, 'hex');
-    const authTag = Buffer.from(authTagHex, 'hex');
-    const ciphertext = Buffer.from(encrypted, 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-gcm', dek, iv);
+  private decrypt(data: string, userId: string): string {
+    const parts = data.split(":");
+
+    if (parts.length === 2) {
+      const [ivHex, encrypted] = parts;
+      const decipher = crypto.createDecipheriv(
+        "aes-256-cbc",
+        this.getMasterKey(),
+        Buffer.from(ivHex, "hex"),
+      );
+      return decipher.update(encrypted, "hex", "utf8") + decipher.final("utf8");
+    }
+
+    if (parts.length !== 3) {
+      throw new AuthTagMismatchError();
+    }
+
+    const [ivHex, authTagHex, ciphertextHex] = parts;
+    const iv = Buffer.from(ivHex, "hex");
+    const authTag = Buffer.from(authTagHex, "hex");
+    const ciphertext = Buffer.from(ciphertextHex, "hex");
+    const decipher = crypto.createDecipheriv(
+      "aes-256-gcm",
+      this.deriveUserKey(userId),
+      iv,
+    );
     decipher.setAuthTag(authTag);
 
-    return decipher.update(ciphertext, undefined, 'utf8') + decipher.final('utf8');
-  }
-
-  private encryptLegacySecret(text: string): string {
-    const key = this.getLegacyKey();
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-    return iv.toString('hex') + ':' + cipher.update(text, 'utf8', 'hex') + cipher.final('hex');
-  }
-
-  private decryptLegacySecret(data: string): string {
-    const [ivHex, encrypted] = data.split(':');
-    const key = this.getLegacyKey();
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, Buffer.from(ivHex, 'hex'));
-    return decipher.update(encrypted, 'hex', 'utf8') + decipher.final('utf8');
-  }
-
-  private getLegacyKey(): Buffer {
-    const keyHex = process.env.ENCRYPTION_KEY;
-    if (!keyHex) {
-      throw new Error('ENCRYPTION_KEY is required when KMS is not configured');
+    try {
+      return Buffer.concat([
+        decipher.update(ciphertext),
+        decipher.final(),
+      ]).toString("utf8");
+    } catch {
+      throw new AuthTagMismatchError();
     }
-    return Buffer.from(keyHex, 'hex');
   }
 }

@@ -1,4 +1,4 @@
-version: '3.9'
+version: "3.9"
 
 # =============================================================================
 # AfroPay-Stellar — Docker Compose (Local Development)
@@ -25,12 +25,13 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: remitx
       POSTGRES_PASSWORD: remitx
       POSTGRES_DB: remitx
     ports:
-      - '5432:5432'
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -43,26 +44,32 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - '6379:6379'
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   api:
-    build: ./apps/api
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - '3001:3001'
+      - "3001:3001"
     environment:
       NODE_ENV: development
       PORT: 3001
       DATABASE_URL: postgresql://remitx:remitx@postgres:5432/remitx
       REDIS_URL: redis://redis:6379
       JWT_SECRET: change_me_in_production
-      ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      # Replace with a random 32-byte hex master key before deployment.
+      ENCRYPTION_KEY: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
       STELLAR_NETWORK: testnet
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
       ANCHOR_USDC_URL: https://testanchor.stellar.org
@@ -73,46 +80,63 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      test: ["CMD-SHELL", "node -e 'require(\"http\").get(\"http://127.0.0.1:3001/health\", ()=>process.exit(0)).on(\"error\", ()=>process.exit(1))' "]
       interval: 15s
       timeout: 10s
       retries: 3
       start_period: 15s
 
   frontend:
-    build: ./apps/frontend
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - '3000:3000'
+      - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:3001
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
     depends_on:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      test: ["CMD-SHELL", "node -e 'require(\"http\").get(\"http://127.0.0.1:3000\", ()=>process.exit(0)).on(\"error\", ()=>process.exit(1))' "]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
 
   rust-worker:
-    build: ./services/rust-worker
+    build:
+      context: ./services/rust-worker
+      dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
-      REDIS_URL: redis://redis:6379
-      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      STELLAR_HORIZON_URL: ${STELLAR_HORIZON_URL:-https://horizon-testnet.stellar.org}
+      METRICS_PORT: ${METRICS_PORT:-9898}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-10}
     depends_on:
       redis:
         condition: service_healthy
-
-  fraud-service:
-    build: ./services/python-analytics
-    restart: unless-stopped
-    ports:
-      - '8000:8000'
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD-SHELL", "ps -ef | grep -q '[w]orker' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  python-analytics:
+    build:
+      context: ./services/python-analytics
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request, sys; urllib.request.urlopen(\"http://127.0.0.1:8000/health\"); sys.exit(0)' "]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -120,3 +144,4 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
