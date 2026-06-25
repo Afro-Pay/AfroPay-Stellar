@@ -34,16 +34,26 @@ export const envValidationSchema = Joi.object({
       'any.required': '"JWT_SECRET" is required',
     }),
 
-  ENCRYPTION_KEY: Joi.string()
-    .length(64)
-    .pattern(/^[0-9a-fA-F]{64}$/)
-    .required()
+  ENCRYPTION_KEY: Joi.alternatives()
+    .try(Joi.string().length(64).pattern(/^[0-9a-fA-F]{64}$/), Joi.allow(null))
+    .optional()
     .messages({
       'string.length':
         '"ENCRYPTION_KEY" must be exactly 64 hexadecimal characters (32 bytes)',
       'string.pattern.base':
         '"ENCRYPTION_KEY" must be a 64-character hex string (0-9, a-f)',
-      'any.required': '"ENCRYPTION_KEY" is required',
+    }),
+
+  KMS_KEY_ID: Joi.string()
+    .optional()
+    .messages({
+      'string.base': '"KMS_KEY_ID" must be a string',
+    }),
+
+  AWS_REGION: Joi.string()
+    .optional()
+    .messages({
+      'string.base': '"AWS_REGION" must be a string',
     }),
 
   STELLAR_NETWORK: Joi.string()
@@ -79,4 +89,4 @@ export const envValidationSchema = Joi.object({
       'string.uri': '"ANCHOR_NGN_URL" must be a valid URL',
       'any.required': '"ANCHOR_NGN_URL" is required',
     }),
-});
+}).or('KMS_KEY_ID', 'ENCRYPTION_KEY').with('KMS_KEY_ID', 'AWS_REGION');
