@@ -31,6 +31,8 @@ model Wallet {
   /// Stellar public key – must be globally unique.
   publicKey       String        @unique
   encryptedSecret String
+  encryptedDek    String?
+  kmsKeyId        String?
   createdAt       DateTime      @default(now())
   user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions    Transaction[]

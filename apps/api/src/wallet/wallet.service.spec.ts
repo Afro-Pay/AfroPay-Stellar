@@ -1,26 +1,66 @@
+import { KMSClient, EncryptCommand, DecryptCommand } from '@aws-sdk/client-kms';
 import { WalletService } from './wallet.service';
 
 // Minimal unit tests without DB — test encryption helpers via reflection
 describe('WalletService encryption', () => {
   let service: WalletService;
+  const originalEnv = { ...process.env };
 
-  beforeEach(() => {
-    process.env.ENCRYPTION_KEY = 'a'.repeat(64); // 32-byte hex
-    service = new WalletService(null as any);
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    jest.restoreAllMocks();
   });
 
-  it('encrypts and decrypts a secret key', () => {
+  it('encrypts and decrypts a secret key with legacy AES', async () => {
+    process.env.ENCRYPTION_KEY = 'a'.repeat(64); // 32-byte hex
+    delete process.env.KMS_KEY_ID;
+    delete process.env.AWS_REGION;
+
+    service = new WalletService(null as any);
     const secret = 'SCZANGBA5YHTNYVSK3TZQOZ6PFPAXDHDWZOBENXVGHD';
-    const encrypted = (service as any).encrypt(secret);
-    const decrypted = (service as any).decrypt(encrypted);
+
+    const encrypted = await (service as any).encryptWalletSecret(secret);
+    expect(encrypted.encryptedDek).toBeNull();
+    expect(encrypted.encryptedSecret).toContain(':');
+
+    const decrypted = await (service as any).decryptWalletSecret({
+      encryptedSecret: encrypted.encryptedSecret,
+      encryptedDek: null,
+    });
     expect(decrypted).toBe(secret);
   });
 
-  it('produces different ciphertext each call (random IV)', () => {
+  it('encrypts and decrypts a secret key with KMS envelope encryption', async () => {
+    process.env.KMS_KEY_ID = 'alias/test-key';
+    process.env.AWS_REGION = 'us-east-1';
+    delete process.env.ENCRYPTION_KEY;
+
+    let capturedDek: Buffer | null = null;
+    jest.spyOn(KMSClient.prototype, 'send').mockImplementation(async (command: any) => {
+      if (command instanceof EncryptCommand) {
+        capturedDek = Buffer.from(command.input.Plaintext);
+        return { CiphertextBlob: Buffer.from('kms-encrypted-dek') } as any;
+      }
+      if (command instanceof DecryptCommand) {
+        return { Plaintext: capturedDek } as any;
+      }
+      return {} as any;
+    });
+
+    service = new WalletService(null as any);
     const secret = 'SCZANGBA5YHTNYVSK3TZQOZ6PFPAXDHDWZOBENXVGHD';
-    const enc1 = (service as any).encrypt(secret);
-    const enc2 = (service as any).encrypt(secret);
-    expect(enc1).not.toBe(enc2);
+
+    const encrypted = await (service as any).encryptWalletSecret(secret);
+    expect(encrypted.encryptedDek).toBeDefined();
+    expect(encrypted.kmsKeyId).toBe('alias/test-key');
+    expect(encrypted.encryptedSecret).toContain(':');
+
+    const decrypted = await (service as any).decryptWalletSecret({
+      encryptedSecret: encrypted.encryptedSecret,
+      encryptedDek: encrypted.encryptedDek,
+    });
+
+    expect(decrypted).toBe(secret);
   });
 });
 

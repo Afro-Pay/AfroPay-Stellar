@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Keypair, Horizon } from 'stellar-sdk';
 import * as crypto from 'crypto';
+import { KMSClient, EncryptCommand, DecryptCommand } from '@aws-sdk/client-kms';
 
 const HORIZON_URL = process.env.STELLAR_HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
 const server = new Horizon.Server(HORIZON_URL);
@@ -27,14 +28,23 @@ interface ReconciliationAsset {
 
 @Injectable()
 export class WalletService {
-  constructor(private prisma: PrismaService) {}
+  private readonly kmsClient: KMSClient | null;
+  private readonly kmsKeyId: string | null;
+
+  constructor(private prisma: PrismaService) {
+    this.kmsClient =
+      process.env.KMS_KEY_ID && process.env.AWS_REGION
+        ? new KMSClient({ region: process.env.AWS_REGION })
+        : null;
+    this.kmsKeyId = process.env.KMS_KEY_ID ?? null;
+  }
 
   async createWallet(userId: string) {
     const keypair = Keypair.random();
-    const encryptedSecret = this.encrypt(keypair.secret());
+    const { encryptedSecret, encryptedDek, kmsKeyId } = await this.encryptWalletSecret(keypair.secret());
 
     const wallet = await this.prisma.wallet.create({
-      data: { userId, publicKey: keypair.publicKey(), encryptedSecret },
+      data: { userId, publicKey: keypair.publicKey(), encryptedSecret, encryptedDek, kmsKeyId },
     });
 
     return { publicKey: wallet.publicKey };
@@ -128,26 +138,29 @@ export class WalletService {
   async exportWallet(userId: string) {
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
     if (!wallet) throw new NotFoundException('Wallet not found');
+
     return {
       publicKey: wallet.publicKey,
-      secretKey: this.decrypt(wallet.encryptedSecret),
+      secretKey: await this.decryptWalletSecret(wallet),
     };
   }
 
   async importWallet(userId: string, secretKey: string) {
     const keypair = Keypair.fromSecret(secretKey);
-    const encryptedSecret = this.encrypt(secretKey);
+    const { encryptedSecret, encryptedDek, kmsKeyId } = await this.encryptWalletSecret(secretKey);
+
     return this.prisma.wallet.upsert({
       where: { userId },
-      update: { publicKey: keypair.publicKey(), encryptedSecret },
-      create: { userId, publicKey: keypair.publicKey(), encryptedSecret },
+      update: { publicKey: keypair.publicKey(), encryptedSecret, encryptedDek, kmsKeyId },
+      create: { userId, publicKey: keypair.publicKey(), encryptedSecret, encryptedDek, kmsKeyId },
     });
   }
 
   async getKeypair(userId: string): Promise<Keypair> {
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
     if (!wallet) throw new NotFoundException('Wallet not found');
-    return Keypair.fromSecret(this.decrypt(wallet.encryptedSecret));
+
+    return Keypair.fromSecret(await this.decryptWalletSecret(wallet));
   }
 
   private async loadAccount(publicKey: string) {
@@ -247,17 +260,121 @@ export class WalletService {
     return error?.response?.status === 404 || error?.status === 404 || error?.name === 'NotFoundError';
   }
 
-  private encrypt(text: string): string {
-    const key = Buffer.from(process.env.ENCRYPTION_KEY!, 'hex');
+  private async decryptWalletSecret(wallet: any): Promise<string> {
+    if (wallet.encryptedDek) {
+      const dek = await this.decryptDekFromKms(wallet.encryptedDek);
+      return this.decryptSecretWithDek(wallet.encryptedSecret, dek);
+    }
+
+    const secret = this.decryptLegacySecret(wallet.encryptedSecret);
+    if (this.kmsClient) {
+      await this.reencryptWalletWithKms(wallet.id, secret);
+    }
+
+    return secret;
+  }
+
+  private async reencryptWalletWithKms(walletId: string, secret: string) {
+    const { encryptedSecret, encryptedDek, kmsKeyId } = await this.encryptWalletSecret(secret);
+    await this.prisma.wallet.update({
+      where: { id: walletId },
+      data: { encryptedSecret, encryptedDek, kmsKeyId },
+    });
+  }
+
+  private async encryptWalletSecret(secretKey: string) {
+    if (this.kmsClient && this.kmsKeyId) {
+      const dek = crypto.randomBytes(32);
+      return {
+        encryptedSecret: this.encryptSecretWithDek(secretKey, dek),
+        encryptedDek: await this.encryptDekWithKms(dek),
+        kmsKeyId: this.kmsKeyId,
+      };
+    }
+
+    return {
+      encryptedSecret: this.encryptLegacySecret(secretKey),
+      encryptedDek: null,
+      kmsKeyId: null,
+    };
+  }
+
+  private async encryptDekWithKms(dek: Buffer): Promise<string> {
+    if (!this.kmsClient || !this.kmsKeyId) {
+      throw new Error('Missing KMS configuration for encryption');
+    }
+
+    const result = await this.kmsClient.send(
+      new EncryptCommand({
+        KeyId: this.kmsKeyId,
+        Plaintext: dek,
+      }),
+    );
+
+    if (!result.CiphertextBlob) {
+      throw new Error('KMS failed to encrypt the data key');
+    }
+
+    return Buffer.from(result.CiphertextBlob).toString('base64');
+  }
+
+  private async decryptDekFromKms(encryptedDek: string): Promise<Buffer> {
+    if (!this.kmsClient) {
+      throw new Error('Missing KMS configuration for decryption');
+    }
+
+    const result = await this.kmsClient.send(
+      new DecryptCommand({
+        CiphertextBlob: Buffer.from(encryptedDek, 'base64'),
+      }),
+    );
+
+    if (!result.Plaintext) {
+      throw new Error('KMS failed to decrypt the data key');
+    }
+
+    return Buffer.from(result.Plaintext);
+  }
+
+  private encryptSecretWithDek(secretKey: string, dek: Buffer): string {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', dek, iv);
+    const encrypted = Buffer.concat([cipher.update(secretKey, 'utf8'), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+
+    return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
+  }
+
+  private decryptSecretWithDek(data: string, dek: Buffer): string {
+    const [ivHex, authTagHex, encrypted] = data.split(':');
+    const iv = Buffer.from(ivHex, 'hex');
+    const authTag = Buffer.from(authTagHex, 'hex');
+    const ciphertext = Buffer.from(encrypted, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', dek, iv);
+    decipher.setAuthTag(authTag);
+
+    return decipher.update(ciphertext, undefined, 'utf8') + decipher.final('utf8');
+  }
+
+  private encryptLegacySecret(text: string): string {
+    const key = this.getLegacyKey();
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
     return iv.toString('hex') + ':' + cipher.update(text, 'utf8', 'hex') + cipher.final('hex');
   }
 
-  private decrypt(data: string): string {
+  private decryptLegacySecret(data: string): string {
     const [ivHex, encrypted] = data.split(':');
-    const key = Buffer.from(process.env.ENCRYPTION_KEY!, 'hex');
+    const key = this.getLegacyKey();
     const decipher = crypto.createDecipheriv('aes-256-cbc', key, Buffer.from(ivHex, 'hex'));
     return decipher.update(encrypted, 'hex', 'utf8') + decipher.final('utf8');
+  }
+
+  private getLegacyKey(): Buffer {
+    const keyHex = process.env.ENCRYPTION_KEY;
+    if (!keyHex) {
+      throw new Error('ENCRYPTION_KEY is required when KMS is not configured');
+    }
+    return Buffer.from(keyHex, 'hex');
   }
 }
