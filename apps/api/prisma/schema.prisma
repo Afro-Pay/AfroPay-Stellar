@@ -32,6 +32,8 @@ model Wallet {
   publicKey       String        @unique
   encryptedSecret String
   createdAt       DateTime      @default(now())
+  /// Automatically updated whenever the wallet record changes (e.g. key rotation).
+  updatedAt       DateTime      @updatedAt
   user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions    Transaction[]
 }

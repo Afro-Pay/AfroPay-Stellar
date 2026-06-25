@@ -210,6 +210,95 @@ export function isTrustlineError(value: TrustlineStatus | TrustlineError): value
   return 'code' in value && 'message' in value;
 }
 
+/**
+ * Remove an existing trustline by setting its limit to 0 via ChangeTrust.
+ *
+ * Only succeeds when the account holds a zero balance for the asset.
+ * Throws `TrustlineError` if the trustline is missing or the balance is non-zero.
+ */
+export async function removeTrustline(
+  horizonUrl: string,
+  keypair: Keypair,
+  asset: TrustlineAsset,
+  networkPassphrase: string = Networks.TESTNET,
+): Promise<string> {
+  const publicKey = keypair.publicKey();
+  const current = await checkTrustline(horizonUrl, publicKey, asset);
+
+  if (current.status === 'missing') {
+    throw buildError('UNKNOWN', `No trustline for ${asset.code} exists on ${publicKey}`, asset);
+  }
+
+  if (current.status === 'exists' && parseFloat(current.balance ?? '0') > 0) {
+    throw buildError(
+      'UNKNOWN',
+      `Cannot remove trustline for ${asset.code}: account still holds ${current.balance}`,
+      asset,
+    );
+  }
+
+  const server = new Horizon.Server(horizonUrl);
+  const account = await server.loadAccount(publicKey);
+  const stellarAsset = new Asset(asset.code, asset.issuer);
+
+  // Setting limit to '0' removes the trustline.
+  const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase })
+    .addOperation(Operation.changeTrust({ asset: stellarAsset, limit: '0' }))
+    .setTimeout(30)
+    .build();
+
+  tx.sign(keypair);
+
+  try {
+    const result = await server.submitTransaction(tx);
+    logger.log(`Trustline removed for ${asset.code} on ${publicKey}`);
+    return (result as any).hash as string;
+  } catch (err: any) {
+    throw buildError(
+      'HORIZON_ERROR',
+      `Failed to remove trustline: ${err?.message}`,
+      asset,
+      err?.response?.status,
+    );
+  }
+}
+
+/**
+ * Pre-flight helper: ensure the destination account trusts `asset` before
+ * submitting a transfer. Returns the trustline status if usable, or throws
+ * a `TrustlineError` describing why the transfer cannot proceed.
+ *
+ * Use this in TransactionService before queuing a job.
+ */
+export async function ensureTrustlineBeforeTransfer(
+  horizonUrl: string,
+  destinationPublicKey: string,
+  asset: TrustlineAsset,
+): Promise<TrustlineStatus> {
+  // XLM is native — no trustline required.
+  if (asset.code === 'XLM') {
+    return { status: 'exists', balance: '0', limit: 'native', asset };
+  }
+
+  const status = await checkTrustline(horizonUrl, destinationPublicKey, asset);
+
+  if (status.status === 'missing') {
+    throw buildError(
+      'UNKNOWN',
+      `Destination account has no trustline for ${asset.code}. The recipient must add one before receiving this asset.`,
+      asset,
+    );
+  }
+  if (status.status === 'unauthorised') {
+    throw buildError('AUTHORISATION_REQUIRED', `Destination account is not authorised for ${asset.code}`, asset);
+  }
+  if (status.status === 'zero_limit') {
+    throw buildError('ZERO_LIMIT', `Destination account trustline limit for ${asset.code} is zero`, asset);
+  }
+
+  return status;
+}
+
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 async function submitChangeTrust(
