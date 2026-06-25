@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { PrismaService } from '../prisma/prisma.service';
@@ -58,8 +58,14 @@ export class TransactionService {
     });
   }
 
-  async getTransaction(txId: string) {
-    return this.prisma.transaction.findUnique({ where: { id: txId } });
+  async getTransaction(txId: string, userId?: string) {
+    const tx = await this.prisma.transaction.findUnique({ where: { id: txId } });
+    
+    if (userId && tx && tx.userId !== userId) {
+      throw new ForbiddenException('Transaction not found');
+    }
+    
+    return tx;
   }
 
   async updateTransactionStatus(
