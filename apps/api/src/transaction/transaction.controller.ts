@@ -2,6 +2,8 @@ import { Body, Controller, Get, Param, Post, Request, UseGuards } from '@nestjs/
 import { TransactionService, SendTransferDto } from './transaction.service';
 import { IsOptional, IsString } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { KycGuard } from '../kyc/kyc.guard';
+import { RateLimit } from '../rate-limit/rate-limit.decorator';
 
 class SendDto implements SendTransferDto {
   @IsString() destinationPublicKey: string;
@@ -17,6 +19,7 @@ export class TransactionController {
   constructor(private txService: TransactionService) {}
 
   @Post('send')
+  @UseGuards(KycGuard)
   @RateLimit({
     keyPrefix: 'transactions:send',
     limit: 20,
@@ -34,7 +37,7 @@ export class TransactionController {
   }
 
   @Get(':id')
-  get(@Param('id') id: string) {
-    return this.txService.getTransaction(id);
+  get(@Param('id') id: string, @Request() req: any) {
+    return this.txService.getTransaction(id, req.user?.userId);
   }
 }

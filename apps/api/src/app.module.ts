@@ -5,6 +5,8 @@ import { TransactionModule } from './transaction/transaction.module';
 import { AnchorModule } from './anchor/anchor.module';
 import { AuthModule } from './auth/auth.module';
 import { RateLimitModule } from './rate-limit/rate-limit.module';
+import { KycModule } from './kyc/kyc.module';
+import { envValidationSchema } from './config/env.validation';
 
 @Module({
   imports: [
@@ -21,6 +23,7 @@ import { RateLimitModule } from './rate-limit/rate-limit.module';
     TransactionModule,
     AnchorModule,
     RateLimitModule,
+    KycModule,
   ],
 })
 export class AppModule {}
