@@ -1,10 +1,16 @@
+import { NotFoundException } from '@nestjs/common';
 import { TransactionService } from './transaction.service';
 import { TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
+
+const mockWallet = { id: 'wallet-456', userId: 'user-123', publicKey: 'GPUBKEY' };
 
 describe('TransactionService', () => {
   it('enqueues transfers with bounded exponential retry options', async () => {
     const txQueue = { add: jest.fn().mockResolvedValue(undefined) };
     const prisma = {
+      wallet: {
+        findUnique: jest.fn().mockResolvedValue(mockWallet),
+      },
       transaction: {
         create: jest.fn().mockResolvedValue({ id: 'tx-123' }),
       },
@@ -23,6 +29,7 @@ describe('TransactionService', () => {
     expect(prisma.transaction.create).toHaveBeenCalledWith({
       data: {
         userId: 'user-123',
+        walletId: 'wallet-456',
         destination: 'GDESTINATION',
         amount: '10',
         assetCode: 'XLM',
@@ -43,5 +50,24 @@ describe('TransactionService', () => {
       },
       TRANSACTION_QUEUE_OPTIONS,
     );
+  });
+
+  it('throws NotFoundException when the user has no wallet', async () => {
+    const txQueue = { add: jest.fn() };
+    const prisma = {
+      wallet: { findUnique: jest.fn().mockResolvedValue(null) },
+      transaction: { create: jest.fn() },
+    };
+    const service = new TransactionService(txQueue as any, prisma as any);
+
+    await expect(
+      service.sendTransfer('user-no-wallet', {
+        destinationPublicKey: 'GDESTINATION',
+        amount: '10',
+        assetCode: 'XLM',
+      }),
+    ).rejects.toThrow(NotFoundException);
+
+    expect(prisma.transaction.create).not.toHaveBeenCalled();
   });
 });
