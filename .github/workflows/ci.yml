@@ -70,3 +70,69 @@ jobs:
 
       - name: Run build
         run: npm run build
+
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: apps/api/package-lock.json
+
+      - name: Start docker-compose stack
+        run: docker compose up -d --build postgres redis
+        timeout-minutes: 2
+
+      - name: Wait for postgres and redis to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose ps postgres | grep -q "healthy" && docker compose ps redis | grep -q "healthy"; then
+              echo "Services are healthy"
+              exit 0
+            fi
+            echo "Waiting for services... ($i/30)"
+            sleep 2
+          done
+          echo "Services did not become healthy in time"
+          docker compose logs postgres redis
+          exit 1
+
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: npm ci
+
+      - name: Generate Prisma Client
+        working-directory: apps/api
+        run: npm run prisma:generate
+
+      - name: Run database migrations
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql://remitx:remitx@localhost:5432/remitx
+        run: npx prisma migrate deploy
+
+      - name: Run E2E tests
+        working-directory: apps/api
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://remitx:remitx@localhost:5432/remitx
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: e2e-test-secret-at-least-32-characters-long
+          ENCRYPTION_KEY: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
+          STELLAR_NETWORK: testnet
+          STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+          ANCHOR_USDC_URL: https://testanchor.stellar.org
+          ANCHOR_NGN_URL: https://testanchor.stellar.org
+        run: npm run test:e2e
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down -v

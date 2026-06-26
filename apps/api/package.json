@@ -6,6 +6,7 @@
     "start": "node dist/main",
     "build": "nest build",
     "test": "jest --passWithNoTests",
+    "test:e2e": "jest --config jest.e2e.json --runInBand --forceExit",
     "prisma:migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\""
@@ -15,6 +16,9 @@
     "testEnvironment": "node",
     "testMatch": [
       "**/*.spec.ts"
+    ],
+    "testPathIgnorePatterns": [
+      ".*\\.e2e-spec\\.ts$"
     ],
     "moduleFileExtensions": [
       "ts",
@@ -50,6 +54,8 @@
     "@types/bcrypt": "^5.0.0",
     "@types/jest": "^29.0.0",
     "@types/node": "^20.0.0",
+    "@types/supertest": "^6.0.2",
+    "supertest": "^6.3.4",
     "@typescript-eslint/eslint-plugin": "^6.21.0",
     "@typescript-eslint/parser": "^6.21.0",
     "eslint": "^8.57.1",

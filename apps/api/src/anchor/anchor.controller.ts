@@ -1,6 +1,7 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AnchorService } from './anchor.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { DepositQueryDto, WithdrawQueryDto, FxRateQueryDto } from './anchor.query';
 
 @UseGuards(JwtAuthGuard)
 @Controller('anchor')
