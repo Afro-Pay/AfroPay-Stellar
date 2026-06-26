@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: python-analytics-service
+  namespace: afropay
+  labels:
+    app: python-analytics
+spec:
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http
+  selector:
+    app: python-analytics
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-analytics
+  namespace: afropay
+  labels:
+    app: python-analytics
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: python-analytics
+  template:
+    metadata:
+      labels:
+        app: python-analytics
+    spec:
+      containers:
+      - name: python-analytics
+        image: registry.example.com/afropay-stellar/python-analytics:latest # Replace with real image tag (e.g. Git SHA)
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: afropay-secrets
+              key: DATABASE_URL
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: afropay-secrets
+              key: REDIS_URL
+        resources:
+          limits:
+            cpu: "1"
+            memory: 1Gi
+          requests:
+            cpu: "250m"
+            memory: 256Mi
+        # NOTE: If /health is not yet fully implemented, use a tcpSocket probe instead.
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          timeoutSeconds: 5
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          timeoutSeconds: 5
+          periodSeconds: 15
