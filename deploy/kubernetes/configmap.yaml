@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: afropay-config
+  namespace: afropay
+data:
+  NODE_ENV: "production"
+  PORT: "3001"
+  STELLAR_NETWORK: "mainnet"
+  STELLAR_HORIZON_URL: "https://horizon.stellar.org"
+  ANCHOR_USDC_URL: "https://anchor.stellar.org"
+  ANCHOR_NGN_URL: "https://anchor.stellar.org"
+  NEXT_PUBLIC_API_URL: "https://api.afropay.com"
+  METRICS_PORT: "9898"
+  WORKER_CONCURRENCY: "10"
