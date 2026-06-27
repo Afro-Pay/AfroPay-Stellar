@@ -1,40 +1,40 @@
-import { Body, Controller, Get, Param, Post, Request, UseGuards } from '@nestjs/common';
-import { TransactionService, SendTransferDto } from './transaction.service';
-import { IsOptional, IsString } from 'class-validator';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { TransactionService } from './transaction.service';
+import { SendDto, TransactionResponseDto } from './dto';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
-class SendDto implements SendTransferDto {
-  @IsString() destinationPublicKey: string;
-  @IsString() amount: string;
-  @IsString() assetCode: string;
-  @IsOptional() @IsString() assetIssuer?: string;
-  @IsOptional() @IsString() memo?: string;
-}
-
+@ApiTags('transaction')
+@Controller('transaction')
 @UseGuards(JwtAuthGuard)
-@Controller('transactions')
+@ApiBearerAuth('JWT-auth')
 export class TransactionController {
-  constructor(private txService: TransactionService) {}
+  constructor(private readonly transactionService: TransactionService) {}
 
   @Post('send')
-  @RateLimit({
-    keyPrefix: 'transactions:send',
-    limit: 20,
-    windowMs: 60_000,
-    limitEnv: 'PUBLIC_API_RATE_LIMIT_MAX',
-    windowMsEnv: 'PUBLIC_API_RATE_LIMIT_WINDOW_MS',
+  @ApiOperation({ summary: 'Send payment' })
+  @ApiResponse({
+    status: 201,
+    description: 'Payment sent successfully',
+    type: TransactionResponseDto,
   })
-  send(@Request() req: any, @Body() dto: SendDto) {
-    return this.txService.sendTransfer(req.user.userId, dto);
+  @ApiResponse({ status: 400, description: 'Invalid transaction data' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 402, description: 'Insufficient funds' })
+  async sendPayment(@Body() sendDto: SendDto) {
+    return this.transactionService.sendPayment(sendDto);
   }
 
-  @Get('history')
-  history(@Request() req: any) {
-    return this.txService.getHistory(req.user.userId);
-  }
-
-  @Get(':id')
-  get(@Param('id') id: string) {
-    return this.txService.getTransaction(id);
+  @Get('history/:walletId')
+  @ApiOperation({ summary: 'Get transaction history' })
+  @ApiResponse({
+    status: 200,
+    description: 'Transaction history retrieved',
+    type: [TransactionResponseDto],
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Wallet not found' })
+  async getHistory(@Param('walletId') walletId: string) {
+    return this.transactionService.getTransactionHistory(walletId);
   }
 }

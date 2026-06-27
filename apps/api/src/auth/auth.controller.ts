@@ -1,40 +1,46 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
-import { IsEmail, IsString, MinLength } from 'class-validator';
-import { RateLimit } from '../rate-limit/rate-limit.decorator';
+import { LoginDto, RegisterDto, AuthResponseDto } from './dto';
 
-class AuthDto {
-  @IsEmail() email: string;
-  @IsString() @MinLength(8) password: string;
-}
-
-class RefreshSessionDto {
-  @IsString() refresh_token: string;
-}
-
+@ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private auth: AuthService) {}
+  constructor(private readonly authService: AuthService) {}
 
   @Post('register')
-  register(@Body() dto: AuthDto) {
-    return this.auth.register(dto.email, dto.password);
+  @ApiOperation({ summary: 'Register a new user' })
+  @ApiResponse({
+    status: 201,
+    description: 'User registered successfully',
+    type: AuthResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Bad request' })
+  @ApiResponse({ status: 409, description: 'User already exists' })
+  async register(@Body() registerDto: RegisterDto) {
+    return this.authService.register(registerDto);
   }
 
   @Post('login')
-  @RateLimit({
-    keyPrefix: 'auth:login',
-    limit: 5,
-    windowMs: 60_000,
-    limitEnv: 'LOGIN_RATE_LIMIT_MAX',
-    windowMsEnv: 'LOGIN_RATE_LIMIT_WINDOW_MS',
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Login user' })
+  @ApiResponse({
+    status: 200,
+    description: 'User logged in successfully',
+    type: AuthResponseDto,
   })
-  login(@Body() dto: AuthDto) {
-    return this.auth.login(dto.email, dto.password);
+  @ApiResponse({ status: 401, description: 'Invalid credentials' })
+  async login(@Body() loginDto: LoginDto) {
+    return this.authService.login(loginDto);
   }
 
-  @Post('refresh')
-  refresh(@Body() dto: RefreshSessionDto) {
-    return this.auth.refreshSession(dto.refresh_token);
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Logout user' })
+  @ApiResponse({ status: 200, description: 'User logged out successfully' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async logout() {
+    return this.authService.logout();
   }
 }
