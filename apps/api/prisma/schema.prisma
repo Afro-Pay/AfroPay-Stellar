@@ -15,6 +15,20 @@ enum TransactionStatus {
   FAILED
 }
 
+/// Allowed lifecycle states for KYC records.
+enum KycStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// KYC verification tiers.
+enum KycTier {
+  NONE
+  BASIC
+  FULL
+}
+
 model User {
   id           String        @id @default(uuid())
   email        String        @unique
@@ -22,6 +36,7 @@ model User {
   createdAt    DateTime      @default(now())
   wallet       Wallet?
   transactions Transaction[]
+  kyc          KycRecord?
 }
 
 model Wallet {
@@ -31,6 +46,8 @@ model Wallet {
   /// Stellar public key – must be globally unique.
   publicKey       String        @unique
   encryptedSecret String
+  encryptedDek    String?
+  kmsKeyId        String?
   createdAt       DateTime      @default(now())
   /// Automatically updated whenever the wallet record changes (e.g. key rotation).
   updatedAt       DateTime      @updatedAt
@@ -72,4 +89,23 @@ model Transaction {
   @@index([userId, createdAt(sort: Desc)])
   /// Speeds up per-wallet history queries.
   @@index([walletId, createdAt(sort: Desc)])
+}
+
+model KycRecord {
+  id              String        @id @default(uuid())
+  userId          String        @unique
+  status          KycStatus     @default(PENDING)
+  tier            KycTier       @default(NONE)
+  documentType    String?
+  documentRef     String?
+  submittedAt     DateTime?
+  reviewedAt      DateTime?
+  rejectionReason String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
 }

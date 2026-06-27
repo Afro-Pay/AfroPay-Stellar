@@ -11,7 +11,9 @@ All environment variables used across AfroPay-Stellar services, their defaults, 
 | `REDIS_URL` | Redis connection string | `redis://localhost:6379` | No | No |
 | `NODE_ENV` | Runtime environment (`development`, `test`, `production`) | — | No | No |
 | `JWT_SECRET` | Secret key for signing JWT tokens | — | Yes | **Yes** |
-| `ENCRYPTION_KEY` | 32-byte hex key for AES-256-CBC wallet key encryption | — | Yes | **Yes** |
+| `ENCRYPTION_KEY` | 32-byte hex key for AES-256-CBC wallet key encryption | — | Conditional | **Yes** |
+| `KMS_KEY_ID` | AWS KMS key identifier used to encrypt per-wallet data keys | — | Conditional | **Yes** |
+| `AWS_REGION` | AWS region for the KMS key | — | Conditional | No |
 | `STELLAR_NETWORK` | Stellar network (`testnet` or `mainnet`) | `testnet` | No | No |
 | `STELLAR_HORIZON_URL` | Stellar Horizon API endpoint | `https://horizon-testnet.stellar.org` | No | No |
 | `ANCHOR_USDC_URL` | SEP-6 anchor URL for USDC deposits/withdrawals | `https://testanchor.stellar.org` | No | No |
