@@ -1,47 +1,35 @@
-import { Controller, Get, Post, Body, UseGuards, Request } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
+import { Controller, Post, Param, UseGuards, Request, BadRequestException } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { WalletService } from './wallet.service';
-import { IsString } from 'class-validator';
-import { RateLimit } from '../rate-limit/rate-limit.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
-class ImportWalletDto {
-  @IsString() secretKey: string;
-}
-
-@UseGuards(AuthGuard('jwt'))
+@ApiTags('wallet')
 @Controller('wallet')
+@UseGuards(JwtAuthGuard)
+@ApiBearerAuth('JWT-auth')
 export class WalletController {
-  constructor(private wallet: WalletService) {}
+  constructor(private readonly walletService: WalletService) {}
 
-  @Post('create')
-  @RateLimit({
-    keyPrefix: 'wallet:create',
-    limit: 10,
-    windowMs: 60_000,
-    limitEnv: 'PUBLIC_API_RATE_LIMIT_MAX',
-    windowMsEnv: 'PUBLIC_API_RATE_LIMIT_WINDOW_MS',
+  @Post(':id/enable-multisig')
+  @ApiOperation({ summary: 'Enable multi-signature on wallet' })
+  @ApiResponse({
+    status: 200,
+    description: 'Multi-signature enabled successfully',
   })
-  create(@Request() req: any) {
-    return this.wallet.createWallet(req.user.userId);
-  }
-
-  @Get('balances')
-  balances(@Request() req: any) {
-    return this.wallet.getBalances(req.user.userId);
-  }
-
-  @Get('reconcile')
-  reconcile(@Request() req: any) {
-    return this.wallet.reconcileWallet(req.user.userId);
-  }
-
-  @Get('export')
-  export(@Request() req: any) {
-    return this.wallet.exportWallet(req.user.userId);
-  }
-
-  @Post('import')
-  import(@Request() req: any, @Body() dto: ImportWalletDto) {
-    return this.wallet.importWallet(req.user.userId, dto.secretKey);
+  @ApiResponse({ status: 400, description: 'Wallet not found or already enabled' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async enableMultisig(
+    @Param('id') walletId: string,
+    @Request() req: any,
+  ) {
+    const userId = req.user.userId;
+    const result = await this.walletService.enableMultiSignature(walletId, userId);
+    
+    return {
+      success: true,
+      message: 'Multi-signature enabled successfully',
+      transactionHash: result.transactionHash,
+      cosignerPublicKey: result.cosignerPublicKey,
+    };
   }
 }
