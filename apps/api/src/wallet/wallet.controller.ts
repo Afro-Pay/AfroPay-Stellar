@@ -1,7 +1,6 @@
-import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Post, Param, UseGuards, Request, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { WalletService } from './wallet.service';
-import { ImportWalletDto, WalletResponseDto } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('wallet')
@@ -11,29 +10,26 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 export class WalletController {
   constructor(private readonly walletService: WalletService) {}
 
-  @Post('import')
-  @ApiOperation({ summary: 'Import existing wallet' })
-  @ApiResponse({
-    status: 201,
-    description: 'Wallet imported successfully',
-    type: WalletResponseDto,
-  })
-  @ApiResponse({ status: 400, description: 'Invalid wallet data' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async importWallet(@Body() importWalletDto: ImportWalletDto) {
-    return this.walletService.importWallet(importWalletDto);
-  }
-
-  @Get(':id')
-  @ApiOperation({ summary: 'Get wallet by ID' })
+  @Post(':id/enable-multisig')
+  @ApiOperation({ summary: 'Enable multi-signature on wallet' })
   @ApiResponse({
     status: 200,
-    description: 'Wallet found',
-    type: WalletResponseDto,
+    description: 'Multi-signature enabled successfully',
   })
-  @ApiResponse({ status: 404, description: 'Wallet not found' })
+  @ApiResponse({ status: 400, description: 'Wallet not found or already enabled' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async getWallet(@Param('id') id: string) {
-    return this.walletService.getWallet(id);
+  async enableMultisig(
+    @Param('id') walletId: string,
+    @Request() req: any,
+  ) {
+    const userId = req.user.userId;
+    const result = await this.walletService.enableMultiSignature(walletId, userId);
+    
+    return {
+      success: true,
+      message: 'Multi-signature enabled successfully',
+      transactionHash: result.transactionHash,
+      cosignerPublicKey: result.cosignerPublicKey,
+    };
   }
 }
