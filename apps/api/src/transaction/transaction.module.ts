@@ -4,15 +4,18 @@ import { TransactionService } from './transaction.service';
 import { TransactionController } from './transaction.controller';
 import { TransactionProcessor } from './transaction.processor';
 import { PrismaModule } from '../prisma/prisma.module';
-import { WalletModule } from '../wallet/wallet.module';
+import { SorobanModule } from '../soroban/soroban.module';
 
 @Module({
   imports: [
-    BullModule.registerQueue({ name: 'transactions' }),
+    BullModule.registerQueue({
+      name: 'transactions',
+    }),
     PrismaModule,
-    WalletModule,
+    SorobanModule,
   ],
   providers: [TransactionService, TransactionProcessor],
   controllers: [TransactionController],
+  exports: [TransactionService],
 })
 export class TransactionModule {}
