@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsInt, Min, Max } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsInt, Min, Max, IsIn } from 'class-validator';
 import { Type } from 'class-transformer';
 import { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from '../transaction.service';
 
@@ -126,6 +126,34 @@ export class GetHistoryQueryDto {
   @IsOptional()
   @IsString()
   cursor?: string;
+
+  @ApiPropertyOptional({
+    description: 'Filter by transaction status.',
+    enum: ['PENDING', 'SUCCESS', 'FAILED', 'RETRYING'],
+    example: 'SUCCESS',
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['PENDING', 'SUCCESS', 'FAILED', 'RETRYING'])
+  status?: string;
+
+  @ApiPropertyOptional({
+    description: 'Filter by asset code.',
+    example: 'USDC',
+  })
+  @IsOptional()
+  @IsString()
+  currency?: string;
+
+  @ApiPropertyOptional({
+    description: 'Filter by date range: "7d" (last 7 days) or "30d" (last 30 days).',
+    enum: ['7d', '30d'],
+    example: '7d',
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['7d', '30d'])
+  dateRange?: string;
 }
 
 /**
