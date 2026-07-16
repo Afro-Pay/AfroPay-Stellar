@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, Copy } from 'lucide-react';
-import { Transaction } from '../store/walletStore';
+import { Transaction } from '../hooks/useWalletData';
 
 const STATUS_COLORS: Record<string, string> = {
   SUCCESS: 'text-green-400 bg-green-400/10',
