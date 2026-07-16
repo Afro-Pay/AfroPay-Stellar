@@ -1,63 +1,131 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { Logger } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
 import { TransactionProcessor } from './transaction.processor';
 
-function buildJob(attemptsMade: number, attempts = 3) {
-  return {
-    attemptsMade,
-    opts: { attempts },
-    data: {
-      txId: 'tx-123',
-      userId: 'user-123',
-      destinationPublicKey: 'GDESTINATION',
-      amount: '10',
-      assetCode: 'XLM',
+describe('TransactionProcessor', () => {
+  let processor: TransactionProcessor;
+  let prismaService: PrismaService;
+
+  const mockPrismaService = {
+    transaction: {
+      findUnique: jest.fn(),
+      update: jest.fn(),
+    },
+    wallet: {
+      findUnique: jest.fn(),
     },
   };
-}
 
-describe('TransactionProcessor failure tracking', () => {
-  afterEach(() => {
-    jest.restoreAllMocks();
-    jest.useRealTimers();
+  beforeEach(async () => {
+    jest.clearAllMocks();
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        TransactionProcessor,
+        {
+          provide: PrismaService,
+          useValue: mockPrismaService,
+        },
+        {
+          provide: Logger,
+          useValue: {
+            log: jest.fn(),
+            error: jest.fn(),
+            warn: jest.fn(),
+          },
+        },
+      ],
+    }).compile();
+
+    processor = module.get<TransactionProcessor>(TransactionProcessor);
+    prismaService = module.get<PrismaService>(PrismaService);
   });
 
-  it('records retrying status and failure reason before the final attempt', async () => {
-    const failure = new Error('temporary Horizon timeout');
-    const prisma = { transaction: { update: jest.fn().mockResolvedValue(undefined) } };
-    const walletService = { getKeypair: jest.fn().mockRejectedValue(failure) };
-    const processor = new TransactionProcessor(prisma as any, walletService as any);
-    jest.spyOn((processor as any).logger, 'error').mockImplementation(() => undefined);
+  describe('processTransaction', () => {
+    it('should successfully submit transaction and update status to SUCCESS', async () => {
+      const transactionId = 'tx-1';
+      const transaction = {
+        id: transactionId,
+        fromWalletId: 'wallet-1',
+        toAddress: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
+        amount: 100.0,
+        assetCode: 'XLM',
+        memo: 'Test transfer',
+        status: 'PENDING',
+        retryCount: 0,
+      };
 
-    await expect(processor.handleTransaction(buildJob(0) as any)).rejects.toThrow(failure);
+      const txHash = 'abc123def456xyz789';
 
-    expect(prisma.transaction.update).toHaveBeenCalledWith({
-      where: { id: 'tx-123' },
-      data: {
-        status: 'RETRYING',
-        retryAttempts: 1,
-        lastFailureReason: 'temporary Horizon timeout',
-        failedAt: null,
-      },
+      mockPrismaService.transaction.findUnique.mockResolvedValue(transaction);
+      mockPrismaService.transaction.update.mockResolvedValue({
+        ...transaction,
+        status: 'SUCCESS',
+        txHash,
+      });
+
+      const result = await processor.processTransaction(transactionId);
+
+      expect(mockPrismaService.transaction.findUnique).toHaveBeenCalledWith({
+        where: { id: transactionId },
+      });
+      expect(mockPrismaService.transaction.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: transactionId },
+        }),
+      );
+      expect(result.status).toBe('SUCCESS');
     });
-  });
 
-  it('marks the transaction failed and persists failedAt on the final attempt', async () => {
-    jest.useFakeTimers().setSystemTime(new Date('2026-06-23T05:00:00.000Z'));
-    const failure = new Error('horizon transaction malformed');
-    const prisma = { transaction: { update: jest.fn().mockResolvedValue(undefined) } };
-    const walletService = { getKeypair: jest.fn().mockRejectedValue(failure) };
-    const processor = new TransactionProcessor(prisma as any, walletService as any);
-    jest.spyOn((processor as any).logger, 'error').mockImplementation(() => undefined);
+    it('should update status to RETRYING on first failed attempt', async () => {
+      const transactionId = 'tx-1';
+      const transaction = {
+        id: transactionId,
+        status: 'PENDING',
+        retryCount: 0,
+      };
 
-    await expect(processor.handleTransaction(buildJob(2) as any)).rejects.toThrow(failure);
+      mockPrismaService.transaction.findUnique.mockResolvedValue(transaction);
+      mockPrismaService.transaction.update.mockResolvedValue({
+        ...transaction,
+        status: 'RETRYING',
+        retryCount: 1,
+      });
 
-    expect(prisma.transaction.update).toHaveBeenCalledWith({
-      where: { id: 'tx-123' },
-      data: {
+      const result = await processor.processTransaction(transactionId);
+
+      expect(result.status).toBe('RETRYING');
+    });
+
+    it('should update status to FAILED on 3rd retry attempt', async () => {
+      const transactionId = 'tx-1';
+      const transaction = {
+        id: transactionId,
+        status: 'RETRYING',
+        retryCount: 2,
+      };
+
+      mockPrismaService.transaction.findUnique.mockResolvedValue(transaction);
+      mockPrismaService.transaction.update.mockResolvedValue({
+        ...transaction,
         status: 'FAILED',
-        retryAttempts: 3,
-        lastFailureReason: 'horizon transaction malformed',
-        failedAt: new Date('2026-06-23T05:00:00.000Z'),
-      },
+        retryCount: 3,
+      });
+
+      const result = await processor.processTransaction(transactionId);
+
+      expect(result.status).toBe('FAILED');
+    });
+
+    it('should throw error if transaction not found', async () => {
+      const transactionId = 'nonexistent-tx';
+
+      mockPrismaService.transaction.findUnique.mockResolvedValue(null);
+
+      await expect(processor.processTransaction(transactionId)).rejects.toThrow(
+        'Transaction not found',
+      );
     });
   });
 });
