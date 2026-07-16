@@ -77,7 +77,9 @@ export class AnchorService {
   }
 
   async getFxRate(from: string, to: string) {
-    const key = `fx:${from}:${to}`;
+    const normFrom = from === 'USDC' ? 'USD' : from;
+    const normTo = to === 'USDC' ? 'USD' : to;
+    const key = `fx:${normFrom}:${normTo}`;
 
     // Try to read cached value
     const cachedRaw = await this.redis.get(key);
@@ -87,7 +89,7 @@ export class AnchorService {
     }
 
     // Fetch latest from provider to decide whether to bust cache
-    const external = await this.fetchExternalRate(from, to);
+    const external = await this.fetchExternalRate(normFrom, normTo);
 
     // If neither external nor cached exist, return null
     if (!external.rate && !cached) {
@@ -97,10 +99,10 @@ export class AnchorService {
     // If no cached value, store external and return
     if (!cached) {
       if (external.rate != null) {
-        const payload = { rate: external.rate, from, to, fetchedAt: Date.now() };
+        const payload = { rate: external.rate, from: normFrom, to: normTo, fetchedAt: Date.now() };
         await this.redis.set(key, JSON.stringify(payload), 'EX', CACHE_TTL_SECONDS);
         const expiresAt = new Date(Date.now() + CACHE_TTL_SECONDS * 1000).toISOString();
-        return { ...payload, rate_expires_at: expiresAt };
+        return { rate: payload.rate, from, to, rate_expires_at: expiresAt };
       }
       // external null but cached handled earlier, so shouldn't reach here
       return { rate: null, from, to, rate_expires_at: null };
@@ -111,10 +113,10 @@ export class AnchorService {
       const delta = Math.abs(external.rate - cached.rate) / external.rate;
       if (delta > DELTA_THRESHOLD) {
         // Significant change: update cache immediately with external
-        const payload = { rate: external.rate, from, to, fetchedAt: Date.now() };
+        const payload = { rate: external.rate, from: normFrom, to: normTo, fetchedAt: Date.now() };
         await this.redis.set(key, JSON.stringify(payload), 'EX', CACHE_TTL_SECONDS);
         const expiresAt = new Date(Date.now() + CACHE_TTL_SECONDS * 1000).toISOString();
-        return { ...payload, rate_expires_at: expiresAt };
+        return { rate: payload.rate, from, to, rate_expires_at: expiresAt };
       }
     }
 

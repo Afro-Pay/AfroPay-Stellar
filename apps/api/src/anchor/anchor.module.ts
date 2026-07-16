@@ -7,5 +7,6 @@ import { WalletModule } from '../wallet/wallet.module';
   imports: [WalletModule],
   controllers: [AnchorController],
   providers: [AnchorService],
+  exports: [AnchorService],
 })
 export class AnchorModule {}
