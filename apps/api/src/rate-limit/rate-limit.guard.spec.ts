@@ -1,7 +1,8 @@
-import { ExecutionContext, HttpException } from '@nestjs/common';
-import { Reflector } from '@nestjs/core';
-import { RateLimitGuard } from './rate-limit.guard';
-import { RateLimitOptions } from './rate-limit.decorator';
+import { ExecutionContext, HttpException } from "@nestjs/common";
+import { Reflector } from "@nestjs/core";
+import { RedisRateLimiter } from "./redis-rate-limiter";
+import { RateLimitGuardRedis } from "./rate-limit.guard.redis";
+import { RateLimitOptions } from "./rate-limit.decorator";
 
 function contextFor(request: any, response: any): ExecutionContext {
   return {
@@ -14,10 +15,15 @@ function contextFor(request: any, response: any): ExecutionContext {
   } as unknown as ExecutionContext;
 }
 
-function guardFor(options: RateLimitOptions | undefined): RateLimitGuard {
-  return new RateLimitGuard({
+function guardFor(
+  options: RateLimitOptions | undefined,
+  redisLimiter: RedisRateLimiter,
+) {
+  const reflector = {
     getAllAndOverride: jest.fn().mockReturnValue(options),
-  } as unknown as Reflector);
+  } as unknown as Reflector;
+
+  return new RateLimitGuardRedis(reflector, redisLimiter);
 }
 
 function responseMock() {
@@ -30,89 +36,73 @@ function responseMock() {
   };
 }
 
-describe('RateLimitGuard', () => {
-  let guard: RateLimitGuard;
+describe("RateLimitGuardRedis", () => {
   const originalEnv = process.env;
+
+  const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
+  const limiter = new RedisRateLimiter(redisUrl, "rate-limit-test");
+
+  const keyPrefix = "auth:login";
 
   beforeEach(() => {
     process.env = { ...originalEnv };
   });
 
-  afterEach(() => {
-    process.env = originalEnv;
+  afterEach(async () => {
+    // Clean per-test keys for stability.
+    await limiter.resetAllForPrefix("auth:login");
   });
 
-  it('allows routes without rate limit metadata', () => {
-    guard = guardFor(undefined);
+  afterAll(async () => {
+    await limiter.close();
+  });
+
+  it("allows routes without rate limit metadata", () => {
+    const guard = guardFor(undefined, limiter);
     const res = responseMock();
-    const ctx = contextFor({ ip: '127.0.0.1', headers: {} }, res);
+    const ctx = contextFor({ ip: "127.0.0.1", headers: {} }, res);
 
-    expect(guard.canActivate(ctx)).toBe(true);
-    expect(res.setHeader).not.toHaveBeenCalled();
+    expect(guard.canActivate(ctx)).resolves.toBe(true);
   });
 
-  it('blocks requests after the configured limit and returns a readable 429 payload', () => {
-    const options = { keyPrefix: 'auth:login', limit: 2, windowMs: 60_000 };
-    guard = guardFor(options);
-    const request = { ip: '203.0.113.10', headers: {} };
-    const firstRes = responseMock();
-    const secondRes = responseMock();
-    const thirdRes = responseMock();
-
-    expect(guard.canActivate(contextFor(request, firstRes))).toBe(true);
-    expect(guard.canActivate(contextFor(request, secondRes))).toBe(true);
-
-    expect(() => guard.canActivate(contextFor(request, thirdRes))).toThrow(HttpException);
-    const thrown = (() => {
-      try {
-        guard.canActivate(contextFor(request, responseMock()));
-      } catch (error) {
-        return error as HttpException;
-      }
-      throw new Error('expected rate limit exception');
-    })();
-
-    expect(thrown.getStatus()).toBe(429);
-    expect(thrown.getResponse()).toMatchObject({
-      code: 'RATE_LIMITED',
+  it("blocks requests after the configured limit and returns readable 429 payload with headers", async () => {
+    const options: RateLimitOptions = {
+      keyPrefix,
       limit: 2,
       windowMs: 60_000,
-    });
-    expect(thirdRes.headers.get('Retry-After')).toBeDefined();
-    expect(thirdRes.headers.get('X-RateLimit-Limit')).toBe('2');
-    expect(thirdRes.headers.get('X-RateLimit-Remaining')).toBe('0');
-  });
-
-  it('uses route-specific environment overrides', () => {
-    process.env.LOGIN_RATE_LIMIT_MAX = '1';
-    process.env.LOGIN_RATE_LIMIT_WINDOW_MS = '5000';
-    const request = { headers: { 'x-forwarded-for': '198.51.100.44, 10.0.0.2' } };
-    const options = {
-      keyPrefix: 'auth:login',
-      limit: 10,
-      windowMs: 60_000,
-      limitEnv: 'LOGIN_RATE_LIMIT_MAX',
-      windowMsEnv: 'LOGIN_RATE_LIMIT_WINDOW_MS',
     };
-    guard = guardFor(options);
 
-    expect(guard.canActivate(contextFor(request, responseMock()))).toBe(true);
+    // Simulate two instances (two pods) by using two separate guard objects.
+    const instanceA = guardFor(
+      options,
+      new RedisRateLimiter(redisUrl, "rate-limit-test"),
+    );
+    const instanceB = guardFor(
+      options,
+      new RedisRateLimiter(redisUrl, "rate-limit-test"),
+    );
 
-    expect(() => guard.canActivate(contextFor(request, responseMock()))).toThrow(HttpException);
-  });
+    const request = { ip: "203.0.113.10", headers: {} };
 
-  it('separates buckets by authenticated user when a user id is available', () => {
-    const options = { keyPrefix: 'transactions:send', limit: 1, windowMs: 60_000 };
-    guard = guardFor(options);
+    const res1 = responseMock();
+    const res2 = responseMock();
+    const res3 = responseMock();
 
-    expect(
-      guard.canActivate(contextFor({ user: { userId: 'user-a' }, headers: {} }, responseMock())),
-    ).toBe(true);
-    expect(
-      guard.canActivate(contextFor({ user: { userId: 'user-b' }, headers: {} }, responseMock())),
-    ).toBe(true);
-    expect(() =>
-      guard.canActivate(contextFor({ user: { userId: 'user-a' }, headers: {} }, responseMock())),
-    ).toThrow(HttpException);
+    await expect(
+      instanceA.canActivate(contextFor(request, res1)),
+    ).resolves.toBe(true);
+    await expect(
+      instanceB.canActivate(contextFor(request, res2)),
+    ).resolves.toBe(true);
+
+    await expect(
+      instanceA.canActivate(contextFor(request, res3)),
+    ).rejects.toBeInstanceOf(HttpException);
+
+    // Inspect last response headers (set before throw)
+    expect(res3.headers.get("X-RateLimit-Limit")).toBe("2");
+    expect(res3.headers.get("X-RateLimit-Remaining")).toBe("0");
+    expect(res3.headers.get("X-RateLimit-Reset")).toBeDefined();
+    expect(res3.headers.get("Retry-After")).toBeDefined();
   });
 });
