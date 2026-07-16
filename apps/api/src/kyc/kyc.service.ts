@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { KycStatus, KycTier } from '@prisma/client';
+import { AnchorService } from '../anchor/anchor.service';
 
 export interface KycSubmitDto {
   documentType: string;
@@ -9,7 +10,10 @@ export interface KycSubmitDto {
 
 @Injectable()
 export class KycService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private anchorService: AnchorService,
+  ) {}
 
   async getKycRecord(userId: string) {
     return this.prisma.kycRecord.findUnique({
@@ -93,7 +97,47 @@ export class KycService {
       },
     });
 
-    return transactions.reduce((sum, tx) => sum + parseFloat(tx.amount), 0);
+    const normalizedValues = await Promise.all(
+      transactions.map((tx) => this.normalizeAmountToUsd(tx.amount, tx.assetCode)),
+    );
+
+    return normalizedValues.reduce((sum, value) => sum + value, 0);
+  }
+
+  async normalizeAmountToUsd(amount: string, assetCode: string): Promise<number> {
+    const numericAmount = parseFloat(amount);
+    if (Number.isNaN(numericAmount) || numericAmount < 0) {
+      throw new BadRequestException('Invalid amount');
+    }
+
+    if (!assetCode || typeof assetCode !== 'string') {
+      throw new BadRequestException('Asset code is required');
+    }
+
+    const normalizedAsset = assetCode.trim().toUpperCase();
+    if (normalizedAsset === 'USD' || normalizedAsset === 'USDC') {
+      return numericAmount;
+    }
+
+    const fxRate = await this.anchorService.getFxRate(normalizedAsset, 'USD');
+    if (!fxRate?.rate) {
+      throw new BadRequestException(
+        `Unable to normalize ${normalizedAsset} to USD for KYC calculation`,
+      );
+    }
+
+    return numericAmount * fxRate.rate;
+  }
+
+  async assertWithinDailyLimit(userId: string, amountUsd: number): Promise<void> {
+    const dailySpent = await this.getDailySpent(userId);
+    const record = await this.getKycRecord(userId);
+    const tier = record?.tier || 'NONE';
+    const limit = this.getLimitForTier(tier);
+
+    if (dailySpent + amountUsd > limit) {
+      throw new ForbiddenException('Transaction limit exceeded');
+    }
   }
 
   getLimitForTier(tier: KycTier | string): number {

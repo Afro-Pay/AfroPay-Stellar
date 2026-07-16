@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { PrismaService } from '../prisma/prisma.service';
+import { KycService } from '../kyc/kyc.service';
 import { TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
 
 export interface SendTransferDto {
@@ -17,9 +18,13 @@ export class TransactionService {
   constructor(
     @InjectQueue('transactions') private txQueue: Queue,
     private prisma: PrismaService,
+    private kycService: KycService,
   ) {}
 
   async sendTransfer(userId: string, dto: SendTransferDto) {
+    const amountUsd = await this.kycService.normalizeAmountToUsd(dto.amount, dto.assetCode);
+    await this.kycService.assertWithinDailyLimit(userId, amountUsd);
+
     // Resolve the wallet FK – every transfer must originate from the user's wallet.
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
     if (!wallet) throw new NotFoundException('Wallet not found for user');
@@ -42,6 +47,10 @@ export class TransactionService {
     return { txId: tx.id, status: 'PENDING' };
   }
 
+  async sendPayment(userId: string, dto: SendTransferDto) {
+    return this.sendTransfer(userId, dto);
+  }
+
   async getHistory(userId: string) {
     return this.prisma.transaction.findMany({
       where: { userId },
@@ -62,7 +71,7 @@ export class TransactionService {
     const tx = await this.prisma.transaction.findUnique({ where: { id: txId } });
     
     if (userId && tx && tx.userId !== userId) {
-      throw new ForbiddenException('Transaction not found');
+      throw new NotFoundException('Transaction not found');
     }
     
     return tx;
