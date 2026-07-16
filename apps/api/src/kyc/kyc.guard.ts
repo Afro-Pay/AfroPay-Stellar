@@ -6,7 +6,6 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { KycService } from './kyc.service';
-import { KycTier } from '@prisma/client';
 
 @Injectable()
 export class KycGuard implements CanActivate {
@@ -16,26 +15,18 @@ export class KycGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const userId = request.user?.userId;
     const amount = parseFloat(request.body?.amount);
+    const assetCode = request.body?.assetCode;
 
     if (!userId) {
       throw new UnauthorizedException('User not found');
     }
 
-    if (!amount || amount <= 0) {
+    if (!amount || amount <= 0 || !assetCode) {
       return true; // Let other validators handle this
     }
 
-    const kycRecord = await this.kycService.getKycRecord(userId);
-    const tier = kycRecord?.tier || ('NONE' as KycTier);
-    const limit = this.kycService.getLimitForTier(tier);
-    const dailySpent = await this.kycService.getDailySpent(userId);
-    const newTotal = dailySpent + amount;
-
-    if (newTotal > limit) {
-      throw new ForbiddenException(
-        `Transaction limit exceeded. Daily limit: $${limit}, Already used: $${dailySpent}, Remaining: $${Math.max(0, limit - dailySpent)}`,
-      );
-    }
+    const amountUsd = await this.kycService.normalizeAmountToUsd(amount.toString(), assetCode);
+    await this.kycService.assertWithinDailyLimit(userId, amountUsd);
 
     return true;
   }

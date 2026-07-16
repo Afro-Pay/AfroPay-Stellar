@@ -44,6 +44,14 @@ export const envValidationSchema = Joi.object({
         '"ENCRYPTION_KEY" must be a 64-character hex string (0-9, a-f)',
     }),
 
+  COSIGNER_SECRET: Joi.string()
+    .pattern(/^S[2-9A-Za-z]{55}$/)
+    .optional()
+    .messages({
+      'string.pattern.base':
+        '"COSIGNER_SECRET" must be a valid Stellar secret seed starting with S',
+    }),
+
   KMS_KEY_ID: Joi.string()
     .optional()
     .messages({

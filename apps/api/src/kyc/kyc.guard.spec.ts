@@ -5,9 +5,8 @@ import { ExecutionContext } from '@nestjs/common';
 describe('KycGuard', () => {
   let guard: KycGuard;
   const mockKycService = {
-    getKycRecord: jest.fn(),
-    getDailySpent: jest.fn(),
-    getLimitForTier: jest.fn(),
+    normalizeAmountToUsd: jest.fn(),
+    assertWithinDailyLimit: jest.fn(),
   };
 
   beforeEach(() => {
@@ -21,18 +20,19 @@ describe('KycGuard', () => {
         switchToHttp: () => ({
           getRequest: () => ({
             user: { userId: 'user-1' },
-            body: { amount: '50' },
+            body: { amount: '50', assetCode: 'USD' },
           }),
         }),
       } as ExecutionContext;
 
-      mockKycService.getKycRecord.mockResolvedValue(null);
-      mockKycService.getDailySpent.mockResolvedValue(20);
-      mockKycService.getLimitForTier.mockReturnValue(100);
+      mockKycService.normalizeAmountToUsd.mockResolvedValue(50);
+      mockKycService.assertWithinDailyLimit.mockResolvedValue(undefined);
 
       const result = await guard.canActivate(mockContext);
 
       expect(result).toBe(true);
+      expect(mockKycService.normalizeAmountToUsd).toHaveBeenCalledWith('50', 'USD');
+      expect(mockKycService.assertWithinDailyLimit).toHaveBeenCalledWith('user-1', 50);
     });
 
     it('should block transaction over limit for NONE tier user', async () => {
@@ -40,14 +40,15 @@ describe('KycGuard', () => {
         switchToHttp: () => ({
           getRequest: () => ({
             user: { userId: 'user-1' },
-            body: { amount: '150' },
+            body: { amount: '150', assetCode: 'USD' },
           }),
         }),
       } as ExecutionContext;
 
-      mockKycService.getKycRecord.mockResolvedValue(null);
-      mockKycService.getDailySpent.mockResolvedValue(0);
-      mockKycService.getLimitForTier.mockReturnValue(100);
+      mockKycService.normalizeAmountToUsd.mockResolvedValue(150);
+      mockKycService.assertWithinDailyLimit.mockRejectedValue(
+        new ForbiddenException('Transaction limit exceeded'),
+      );
 
       await expect(guard.canActivate(mockContext)).rejects.toThrow(ForbiddenException);
     });
@@ -57,16 +58,15 @@ describe('KycGuard', () => {
         switchToHttp: () => ({
           getRequest: () => ({
             user: { userId: 'user-1' },
-            body: { amount: '500' },
+            body: { amount: '500', assetCode: 'USD' },
           }),
         }),
       } as ExecutionContext;
 
-      mockKycService.getKycRecord.mockResolvedValue({
-        tier: 'BASIC',
-      });
-      mockKycService.getDailySpent.mockResolvedValue(4600);
-      mockKycService.getLimitForTier.mockReturnValue(5000);
+      mockKycService.normalizeAmountToUsd.mockResolvedValue(500);
+      mockKycService.assertWithinDailyLimit.mockRejectedValue(
+        new ForbiddenException('Transaction limit exceeded'),
+      );
 
       await expect(guard.canActivate(mockContext)).rejects.toThrow(ForbiddenException);
     });
@@ -76,16 +76,13 @@ describe('KycGuard', () => {
         switchToHttp: () => ({
           getRequest: () => ({
             user: { userId: 'user-1' },
-            body: { amount: '3000' },
+            body: { amount: '3000', assetCode: 'USD' },
           }),
         }),
       } as ExecutionContext;
 
-      mockKycService.getKycRecord.mockResolvedValue({
-        tier: 'BASIC',
-      });
-      mockKycService.getDailySpent.mockResolvedValue(1500);
-      mockKycService.getLimitForTier.mockReturnValue(5000);
+      mockKycService.normalizeAmountToUsd.mockResolvedValue(3000);
+      mockKycService.assertWithinDailyLimit.mockResolvedValue(undefined);
 
       const result = await guard.canActivate(mockContext);
 
@@ -97,7 +94,7 @@ describe('KycGuard', () => {
         switchToHttp: () => ({
           getRequest: () => ({
             user: null,
-            body: { amount: '100' },
+            body: { amount: '100', assetCode: 'USD' },
           }),
         }),
       } as ExecutionContext;
@@ -110,7 +107,7 @@ describe('KycGuard', () => {
         switchToHttp: () => ({
           getRequest: () => ({
             user: { userId: 'user-1' },
-            body: { amount: null },
+            body: { amount: null, assetCode: 'USD' },
           }),
         }),
       } as ExecutionContext;
@@ -118,6 +115,7 @@ describe('KycGuard', () => {
       const result = await guard.canActivate(mockContext);
 
       expect(result).toBe(true);
+      expect(mockKycService.normalizeAmountToUsd).not.toHaveBeenCalled();
     });
   });
 });

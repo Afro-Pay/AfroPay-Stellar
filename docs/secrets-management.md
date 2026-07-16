@@ -24,7 +24,8 @@ Every service **validates required environment variables at startup** and fails 
 | `DATABASE_URL` | Yes | Must be a valid PostgreSQL connection string (`postgresql://...`) | Prisma ORM connection |
 | `REDIS_URL` | Yes | Must be a valid Redis connection string (`redis://...` or `rediss://...`) | BullMQ queue backend |
 | `JWT_SECRET` | Yes | Minimum 32 characters | JWT signing/verification |
-| `ENCRYPTION_KEY` | Yes | Must be a 64-character hex string (32 bytes) | AES-256-CBC wallet key encryption |
+| `ENCRYPTION_KEY` | Yes | Must be a 64-character hex string (32 bytes) | AES-256-GCM wallet key encryption |
+| `COSIGNER_SECRET` | No | Must be a valid Stellar secret seed starting with `S` | Private key for the cosigner account used in multi-signature wallet flows |
 | `STELLAR_NETWORK` | Yes | Must be `testnet` or `mainnet` | Stellar network passphrase selection |
 | `STELLAR_HORIZON_URL` | Yes | Must be a valid HTTPS URL | Stellar Horizon API endpoint |
 | `ANCHOR_USDC_URL` | Yes | Must be a valid HTTPS URL | USDC anchor (SEP-6) endpoint |
@@ -104,7 +105,29 @@ When using `docker-compose up`, secrets are passed as environment variables in t
 ---
 
 ## Production
+### Vault-backed cosigner configuration
 
+For production-grade deployments, the cosigner secret should be sourced from a secure secrets manager and injected into the runtime as `COSIGNER_SECRET`.
+
+- HashiCorp Vault: store the Stellar secret seed in a secure KV path and expose it to the container environment through Vault Agent, Vault CSI, or a deployment-time secret injection mechanism.
+- AWS Secrets Manager: store the secret as a string or JSON object and map it to `COSIGNER_SECRET` during service startup.
+- Kubernetes Secrets / External Secrets: use a Kubernetes secret or an external secrets operator to populate the environment variable without embedding it in source control.
+
+Example Vault KV entry:
+
+```bash
+vault kv put secret/afropay/cosigner COSIGNER_SECRET="S..."
+```
+
+Example AWS Secrets Manager secret value:
+
+```json
+{
+  "COSIGNER_SECRET": "S..."
+}
+```
+
+The API will validate `COSIGNER_SECRET` at startup by loading it via `stellar-sdk` and confirming it is a well-formed Stellar secret seed.
 ### Principles
 
 1. **Never hardcode secrets** in source code, Dockerfiles, Compose files, or Helm charts

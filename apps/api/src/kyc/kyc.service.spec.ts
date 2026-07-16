@@ -1,5 +1,5 @@
 import { KycService } from './kyc.service';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 
 describe('KycService', () => {
   let service: KycService;
@@ -12,10 +12,14 @@ describe('KycService', () => {
       findMany: jest.fn(),
     },
   };
+  const mockAnchorService = {
+    getFxRate: jest.fn(),
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new KycService(mockPrisma as any);
+    mockAnchorService.getFxRate.mockResolvedValue({ rate: 1, from: 'USD', to: 'USD' });
+    service = new KycService(mockPrisma as any, mockAnchorService as any);
   });
 
   describe('getKycRecord', () => {
@@ -126,11 +130,11 @@ describe('KycService', () => {
       expect(result.dailyLimit).toBe(5000);
     });
 
-    it('should calculate daily spent from SUCCESS transactions', async () => {
+    it('should calculate daily spent from USD transactions', async () => {
       mockPrisma.kycRecord.findUnique.mockResolvedValue(null);
       mockPrisma.transaction.findMany.mockResolvedValue([
-        { amount: '100' },
-        { amount: '250.50' },
+        { amount: '100', assetCode: 'USD' },
+        { amount: '250.50', assetCode: 'USD' },
       ]);
 
       const result = await service.getKycStatus('user-1');
@@ -163,15 +167,36 @@ describe('KycService', () => {
   });
 
   describe('getDailySpent', () => {
-    it('should sum SUCCESS transactions from today', async () => {
+    it('should normalize NGN transactions to USD', async () => {
+      mockAnchorService.getFxRate.mockResolvedValueOnce({ rate: 0.00065, from: 'NGN', to: 'USD' });
       mockPrisma.transaction.findMany.mockResolvedValue([
-        { amount: '50' },
-        { amount: '75.50' },
+        { amount: '50000', assetCode: 'NGN' },
       ]);
 
       const result = await service.getDailySpent('user-1');
 
-      expect(result).toBe(125.5);
+      expect(result).toBeCloseTo(32.5);
+      expect(mockAnchorService.getFxRate).toHaveBeenCalledWith('NGN', 'USD');
+    });
+
+    it('should normalize mixed asset transactions to USD', async () => {
+      mockAnchorService.getFxRate.mockImplementation(async (from: string) => {
+        if (from === 'NGN') return { rate: 0.00065, from: 'NGN', to: 'USD' };
+        if (from === 'XLM') return { rate: 0.11, from: 'XLM', to: 'USD' };
+        return { rate: 1, from: 'USD', to: 'USD' };
+      });
+
+      mockPrisma.transaction.findMany.mockResolvedValue([
+        { amount: '100', assetCode: 'USD' },
+        { amount: '1000', assetCode: 'NGN' },
+        { amount: '10', assetCode: 'XLM' },
+      ]);
+
+      const result = await service.getDailySpent('user-1');
+
+      expect(result).toBeCloseTo(100 + 0.65 + 1.1);
+      expect(mockAnchorService.getFxRate).toHaveBeenCalledWith('NGN', 'USD');
+      expect(mockAnchorService.getFxRate).toHaveBeenCalledWith('XLM', 'USD');
     });
 
     it('should return 0 for user with no transactions', async () => {
@@ -180,6 +205,28 @@ describe('KycService', () => {
       const result = await service.getDailySpent('user-1');
 
       expect(result).toBe(0);
+    });
+  });
+
+  describe('assertWithinDailyLimit', () => {
+    it('should allow a transaction under the NONE tier limit', async () => {
+      mockPrisma.kycRecord.findUnique.mockResolvedValue({ tier: 'NONE' });
+      mockPrisma.transaction.findMany.mockResolvedValue([
+        { amount: '20', assetCode: 'USD' },
+      ]);
+
+      await expect(service.assertWithinDailyLimit('user-1', 80)).resolves.toBeUndefined();
+    });
+
+    it('should block a transaction that exceeds the NONE tier limit', async () => {
+      mockPrisma.kycRecord.findUnique.mockResolvedValue({ tier: 'NONE' });
+      mockPrisma.transaction.findMany.mockResolvedValue([
+        { amount: '20', assetCode: 'USD' },
+      ]);
+
+      await expect(service.assertWithinDailyLimit('user-1', 90)).rejects.toThrow(
+        new ForbiddenException('Transaction limit exceeded'),
+      );
     });
   });
 

@@ -7,6 +7,7 @@ import { TransferSimulationService } from './transfer-simulation.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AuthModule } from '../auth/auth.module';
+import { KycModule } from '../kyc/kyc.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { AuthModule } from '../auth/auth.module';
     PrismaModule,
     WalletModule,
     AuthModule,
+    KycModule,
   ],
   providers: [TransactionService, TransactionProcessor, TransferSimulationService],
   controllers: [TransactionController],

@@ -5,7 +5,7 @@ import { TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
 const mockWallet = { id: 'wallet-456', userId: 'user-123', publicKey: 'GPUBKEY' };
 
 describe('TransactionService', () => {
-  it('enqueues transfers with bounded exponential retry options', async () => {
+  it('enqueues transfers with KYC checks and bounded retry options', async () => {
     const txQueue = { add: jest.fn().mockResolvedValue(undefined) };
     const prisma = {
       wallet: {
@@ -15,7 +15,11 @@ describe('TransactionService', () => {
         create: jest.fn().mockResolvedValue({ id: 'tx-123' }),
       },
     };
-    const service = new TransactionService(txQueue as any, prisma as any);
+    const kycService = {
+      normalizeAmountToUsd: jest.fn().mockResolvedValue(1.1),
+      assertWithinDailyLimit: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new TransactionService(txQueue as any, prisma as any, kycService as any);
 
     await expect(
       service.sendTransfer('user-123', {
@@ -26,6 +30,8 @@ describe('TransactionService', () => {
       }),
     ).resolves.toEqual({ txId: 'tx-123', status: 'PENDING' });
 
+    expect(kycService.normalizeAmountToUsd).toHaveBeenCalledWith('10', 'XLM');
+    expect(kycService.assertWithinDailyLimit).toHaveBeenCalledWith('user-123', 1.1);
     expect(prisma.transaction.create).toHaveBeenCalledWith({
       data: {
         userId: 'user-123',
@@ -58,7 +64,11 @@ describe('TransactionService', () => {
       wallet: { findUnique: jest.fn().mockResolvedValue(null) },
       transaction: { create: jest.fn() },
     };
-    const service = new TransactionService(txQueue as any, prisma as any);
+    const kycService = {
+      normalizeAmountToUsd: jest.fn(),
+      assertWithinDailyLimit: jest.fn(),
+    };
+    const service = new TransactionService(txQueue as any, prisma as any, kycService as any);
 
     await expect(
       service.sendTransfer('user-no-wallet', {

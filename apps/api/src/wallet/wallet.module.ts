@@ -3,10 +3,11 @@ import { WalletService } from './wallet.service';
 import { WalletController } from './wallet.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
+import { VaultService } from '../vault/vault.service';
 
 @Module({
   imports: [PrismaModule, AuthModule],
-  providers: [WalletService],
+  providers: [WalletService, VaultService],
   controllers: [WalletController],
   exports: [WalletService],
 })
