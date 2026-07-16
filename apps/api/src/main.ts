@@ -1,9 +1,29 @@
 import { NestFactory } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { GlobalExceptionFilter } from './common/filters';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // ── Centralised error handling ──────────────────────────────────────────────
+  // GlobalExceptionFilter must be registered first so it wraps all errors,
+  // including those thrown by the ValidationPipe below.
+  app.useGlobalFilters(new GlobalExceptionFilter());
+
+  // Global ValidationPipe — transforms & validates all incoming DTOs.
+  // Errors are caught by GlobalExceptionFilter and formatted consistently.
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,          // strip properties not in the DTO
+      forbidNonWhitelisted: true, // error on unknown properties
+      transform: true,          // auto-transform payloads to DTO instances
+      transformOptions: {
+        enableImplicitConversion: true,
+      },
+    }),
+  );
 
   // Swagger configuration (only in development)
   if (process.env.NODE_ENV !== 'production') {
