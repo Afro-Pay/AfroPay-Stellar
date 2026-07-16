@@ -127,10 +127,14 @@ Internal storage keys for contract data.
 
 ## Storage Pattern
 
-The contract uses instance storage with the following TTL strategy:
-- Escrow records are stored with a 1-year TTL
-- Storage is extended when escrows are created
-- Each escrow is stored under a unique key derived from its ID
+The contract uses a dual-storage strategy to optimize gas fees and prevent data loss:
+- **`EscrowCounter` (Instance Storage)**: A single global counter representing contract state. It shares the lifecycle of the contract instance.
+- **`EscrowRecord`s (Persistent Storage)**: Each individual escrow record is stored under a unique key (`DataKey::Escrow(U256)`) in persistent storage. This ensures that the lifespan of each record is managed independently and prevents silent data loss due to contract instance TTL expiration.
+
+### TTL Strategy
+- **Initial TTL**: On `deposit()`, the persistent key of the escrow record is extended with a TTL of 1 year (`31_536_000` ledgers).
+- **TTL Extension**: When an escrow is updated via `release()` or `refund()`, its persistent TTL is explicitly refreshed back to 1 year before saving the state change.
+- **Instance TTL**: The contract instance TTL is also refreshed to 1 year on `deposit()`.
 
 ## Security Considerations
 
