@@ -88,13 +88,22 @@ impl Contract {
             is_refunded: false,
         };
 
-        // Store escrow record with lifetime
+        let escrow_key = DataKey::Escrow(escrow_id.clone());
+
+        // Store escrow record in persistent storage
         env.storage()
-            .instance()
-            .set(&DataKey::Escrow(escrow_id.clone()), &record);
+            .persistent()
+            .set(&escrow_key, &record);
 
         // Set storage TTL to 1 year
         let one_year_ledgers = 31_536_000; // Approximate seconds in a year
+
+        // Extend persistent key TTL
+        env.storage()
+            .persistent()
+            .extend_ttl(&escrow_key, one_year_ledgers, one_year_ledgers);
+
+        // Extend instance TTL
         env.storage()
             .instance()
             .extend_ttl(one_year_ledgers, one_year_ledgers);
@@ -111,10 +120,11 @@ impl Contract {
     /// * The release_timestamp must have passed
     /// * The escrow must not have been released or refunded already
     pub fn release(env: Env, escrow_id: U256) {
+        let escrow_key = DataKey::Escrow(escrow_id.clone());
         let mut record: EscrowRecord = env
             .storage()
-            .instance()
-            .get(&DataKey::Escrow(escrow_id.clone()))
+            .persistent()
+            .get(&escrow_key)
             .expect("escrow not found");
 
         if record.is_released {
@@ -128,7 +138,7 @@ impl Contract {
         let current_ledger_time = env.ledger().timestamp();
         if current_ledger_time < record.release_timestamp {
             panic!("release timestamp not reached");
-       }
+        }
 
         // Transfer tokens from contract to recipient
         let token_client = token::Client::new(&env, &record.asset);
@@ -140,7 +150,14 @@ impl Contract {
 
         // Update record
         record.is_released = true;
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &record);
+
+        // Extend persistent key TTL before update
+        let one_year_ledgers = 31_536_000;
+        env.storage()
+            .persistent()
+            .extend_ttl(&escrow_key, one_year_ledgers, one_year_ledgers);
+
+        env.storage().persistent().set(&escrow_key, &record);
     }
 
     /// Refund funds from escrow back to the depositor.
@@ -153,10 +170,11 @@ impl Contract {
     /// * The escrow must not have been released or refunded already
     /// * The release_timestamp must not have passed (or be within a reasonable grace period)
     pub fn refund(env: Env, escrow_id: U256) {
+        let escrow_key = DataKey::Escrow(escrow_id.clone());
         let mut record: EscrowRecord = env
             .storage()
-            .instance()
-            .get(&DataKey::Escrow(escrow_id.clone()))
+            .persistent()
+            .get(&escrow_key)
             .expect("escrow not found");
 
         record.depositor.require_auth();
@@ -185,7 +203,14 @@ impl Contract {
 
         // Update record
         record.is_refunded = true;
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &record);
+
+        // Extend persistent key TTL before update
+        let one_year_ledgers = 31_536_000;
+        env.storage()
+            .persistent()
+            .extend_ttl(&escrow_key, one_year_ledgers, one_year_ledgers);
+
+        env.storage().persistent().set(&escrow_key, &record);
     }
 
     /// Get the escrow record by ID.
@@ -196,7 +221,7 @@ impl Contract {
     /// # Returns
     /// The escrow record if it exists, None otherwise
     pub fn get_escrow(env: Env, escrow_id: U256) -> Option<EscrowRecord> {
-        env.storage().instance().get(&DataKey::Escrow(escrow_id))
+        env.storage().persistent().get(&DataKey::Escrow(escrow_id))
     }
 
     /// Contract version for deployment validation.

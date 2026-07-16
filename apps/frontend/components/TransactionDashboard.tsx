@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { useWalletStore } from '../store/walletStore';
+import { useTransactions } from '../hooks/useWalletData';
 import TransactionFilters from './TransactionFilters';
 import TransactionRow from './TransactionRow';
 import { Loader2, ChevronLeft, ChevronRight, Inbox } from 'lucide-react';
@@ -11,27 +11,13 @@ import { Loader2, ChevronLeft, ChevronRight, Inbox } from 'lucide-react';
 const PAGE_SIZE = 25;
 
 export default function TransactionDashboard() {
-  const {
-    transactions,
-    nextCursor,
-    totalTransactions,
-    fetchTransactions,
-    isLoading,
-  } = useWalletStore();
-
-  // Stack of cursors used to navigate backwards. Index 0 = first page (no cursor).
-  const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([null]);
-  const [pageIndex, setPageIndex] = useState(0);
+  const { data: transactions = [], isLoading: loading } = useTransactions();
 
   const [statusFilter, setStatusFilter] = useState('all');
   const [currencyFilter, setCurrencyFilter] = useState('all');
   const [dateRangeFilter, setDateRangeFilter] = useState('all');
 
-  // Load the first page on mount.
-  useEffect(() => {
-    fetchTransactions(null, PAGE_SIZE, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Reset to page 1 when filters change — the current page may no longer be
   // meaningful after a filter switch, and we already have its data locally.
