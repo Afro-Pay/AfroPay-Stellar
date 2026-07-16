@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import api from '../lib/api';
+import api, { SimulationResult } from '../lib/api';
 
 interface Balance { asset: string; balance: string; }
 export interface Transaction {
@@ -20,6 +20,10 @@ interface WalletStore {
     destinationPublicKey: string; amount: string;
     assetCode: string; assetIssuer?: string; memo?: string;
   }) => Promise<void>;
+  simulateTransfer: (data: {
+    destinationPublicKey: string; amount: string;
+    assetCode: string; assetIssuer?: string;
+  }) => Promise<SimulationResult>;
 }
 
 export const useWalletStore = create<WalletStore>((set, get) => ({
@@ -64,5 +68,10 @@ export const useWalletStore = create<WalletStore>((set, get) => ({
     } else {
       await get().fetchBalances();
     }
+  },
+
+  simulateTransfer: async (payload) => {
+    const { data } = await api.post('/transactions/simulate', payload);
+    return data;
   },
 }));

@@ -1,6 +1,24 @@
 import axios from 'axios';
 import { env } from './env';
 
+export interface SimulationRequest {
+  destinationPublicKey: string;
+  amount: string;
+  assetCode: string;
+  assetIssuer?: string;
+}
+
+export interface SimulationResult {
+  status: 'ok' | 'blocked';
+  path: string[];
+  sourceAmount: string;
+  estimatedDestinationAmount: string | null;
+  minimumDestinationAmount: string | null;
+  effectiveRate: number | null;
+  rateExpiresAt: string | null;
+  issues: Array<{ code: string; message: string }>;
+}
+
 const baseURL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const api = axios.create({ baseURL });
 const authApi = axios.create({ baseURL });
