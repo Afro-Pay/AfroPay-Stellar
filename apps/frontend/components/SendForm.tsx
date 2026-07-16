@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useWalletStore } from "../store/walletStore";
 import { SimulationResult } from "../lib/api";
 
 const ASSETS = ["XLM", "USDC", "NGN"];
 
 export default function SendForm() {
-  const { sendTransfer, simulateTransfer, fetchBalances, fetchTransactions } = useWalletStore();
+  const queryClient = useQueryClient();
+  const { sendTransfer, simulateTransfer } = useWalletStore();
   const [form, setForm] = useState({
     destinationPublicKey: "",
     amount: "",
@@ -141,8 +143,8 @@ export default function SendForm() {
         assetCode: "XLM",
         memo: "",
       });
-      fetchBalances();
-      fetchTransactions();
+      queryClient.invalidateQueries({ queryKey: ['balances'] });
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
     } catch {
       setStatus("Failed to send. Please try again.");
     }

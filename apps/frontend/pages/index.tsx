@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useWalletStore } from '../store/walletStore';
+import { useBalances, useTransactions } from '../hooks/useWalletData';
 import BalanceCard from '../components/BalanceCard';
 import SendForm from '../components/SendForm';
 import TransactionList from '../components/TransactionList';
@@ -8,7 +9,9 @@ import SkeletonCard from '../components/SkeletonCard';
 
 export default function Dashboard() {
   const router = useRouter();
-  const { balances, transactions, isLoading, error, fetchBalances, fetchTransactions } = useWalletStore();
+  const { publicKey, setPublicKey } = useWalletStore();
+  const { data: balances = [], isLoading, error } = useBalances();
+  const { data: transactions = [] } = useTransactions();
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -16,9 +19,9 @@ export default function Dashboard() {
       router.push("/login");
       return;
     }
-    fetchBalances();
-    fetchTransactions();
-  }, []);
+    const pk = localStorage.getItem("publicKey");
+    if (pk) setPublicKey(pk);
+  }, [setPublicKey]);
 
   return (
     <main className="p-4 max-w-3xl mx-auto">
@@ -28,7 +31,7 @@ export default function Dashboard() {
 
       {error && (
         <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded-xl text-red-300 text-sm">
-          {error}
+          {error.message}
         </div>
       )}
 

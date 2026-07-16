@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { useWalletStore } from '../store/walletStore';
+import { useTransactions } from '../hooks/useWalletData';
 import TransactionFilters from './TransactionFilters';
 import TransactionRow from './TransactionRow';
 import { Loader2, ChevronLeft, ChevronRight, Inbox } from 'lucide-react';
@@ -7,18 +7,13 @@ import { Loader2, ChevronLeft, ChevronRight, Inbox } from 'lucide-react';
 const ITEMS_PER_PAGE = 25;
 
 export default function TransactionDashboard() {
-  const { transactions, fetchTransactions } = useWalletStore();
-  const [loading, setLoading] = useState(true);
-  
+  const { data: transactions = [], isLoading: loading } = useTransactions();
+
   const [statusFilter, setStatusFilter] = useState('all');
   const [currencyFilter, setCurrencyFilter] = useState('all');
   const [dateRangeFilter, setDateRangeFilter] = useState('all');
-  
-  const [currentPage, setCurrentPage] = useState(1);
 
-  useEffect(() => {
-    fetchTransactions().finally(() => setLoading(false));
-  }, [fetchTransactions]);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const filteredTransactions = useMemo(() => {
     return transactions.filter(tx => {

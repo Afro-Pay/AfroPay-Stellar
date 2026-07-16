@@ -70,9 +70,9 @@ export default function Login() {
       <form onSubmit={submit} className="bg-gray-900 p-8 rounded-xl w-full max-w-sm space-y-4">
         <h1 className="text-2xl font-bold text-center">RemitX</h1>
         <p className="text-center text-gray-400">{isRegister ? 'Create account' : 'Sign in'}</p>
-        {error && (
+        {authError && (
           <p id="auth-error" className="text-red-400 text-sm" role="alert">
-            {error}
+            {authError}
           </p>
         )}
         <div>
@@ -87,7 +87,7 @@ export default function Login() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             autoComplete="email"
-            aria-describedby={error ? 'auth-error' : undefined}
+            aria-describedby={authError ? 'auth-error' : undefined}
             required
           />
         </div>
@@ -103,7 +103,7 @@ export default function Login() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete={isRegister ? 'new-password' : 'current-password'}
-            aria-describedby={error ? 'auth-error' : undefined}
+            aria-describedby={authError ? 'auth-error' : undefined}
             required
             minLength={8}
           />
