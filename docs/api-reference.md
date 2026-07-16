@@ -267,24 +267,55 @@ Send a transaction to another Stellar public key.
 ```
 
 ### 3.2 Get Transaction History
-Retrieve the transaction history for the user's wallet.
+Retrieve the paginated transaction history for the user's wallet. Uses cursor-based pagination so results stay stable as new transactions arrive.
 
 **Endpoint:** `GET /transactions/history`
 
+**Query Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `limit` | integer | No | `25` | Records per page. Must be between 1 and 100. Returns 400 if exceeded. |
+| `cursor` | string | No | — | Opaque cursor from the previous response's `nextCursor`. Omit for the first page. |
+
+**Example Request — first page:**
+`GET /transactions/history?limit=25`
+
+**Example Request — next page:**
+`GET /transactions/history?limit=25&cursor=clx1abc2d3ef456789`
+
 **Example Response:**
 ```json
-[
-  {
-    "id": "abc123def456...",
-    "type": "payment",
-    "amount": "10.5",
-    "assetCode": "XLM",
-    "status": "RETRYING",
-    "retryAttempts": 1,
-    "lastFailureReason": "temporary Horizon timeout",
-    "createdAt": "2023-10-01T12:00:00Z"
-  }
-]
+{
+  "data": [
+    {
+      "id": "clx1abc2d3ef456789",
+      "type": "payment",
+      "amount": "10.5",
+      "assetCode": "XLM",
+      "status": "SUCCESS",
+      "createdAt": "2023-10-01T12:00:00Z"
+    }
+  ],
+  "nextCursor": "clx9xyz8w7vu654321",
+  "total": 120
+}
+```
+
+**Pagination flow:**
+1. Fetch the first page with `GET /transactions/history?limit=25`. Save `nextCursor`.
+2. If `nextCursor` is non-null, fetch the next page: `GET /transactions/history?limit=25&cursor=<nextCursor>`.
+3. Repeat until `nextCursor` is `null` — you have reached the last page.
+
+**Error — limit exceeded:**
+```json
+{
+  "statusCode": 400,
+  "code": "BAD_REQUEST",
+  "message": "limit must not exceed 100. Received: 200",
+  "timestamp": "2023-10-01T12:00:00.000Z",
+  "path": "/transactions/history"
+}
 ```
 
 ### 3.3 Get Transaction by ID

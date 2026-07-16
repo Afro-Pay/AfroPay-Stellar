@@ -1,10 +1,26 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import Redis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { KycService } from '../kyc/kyc.service';
 import { TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
+
+export const HISTORY_MAX_LIMIT = 100;
+export const HISTORY_DEFAULT_LIMIT = 25;
+
+export interface GetHistoryOptions {
+  /** Maximum number of records to return. Capped at HISTORY_MAX_LIMIT (100). */
+  limit?: number;
+  /** Opaque cursor string — the `id` of the last transaction on the previous page. */
+  cursor?: string;
+}
+
+export interface PaginatedHistory {
+  data: Awaited<ReturnType<PrismaService['transaction']['findMany']>>;
+  nextCursor: string | null;
+  total: number;
+}
 
 export interface SendTransferDto {
   destinationPublicKey: string;
@@ -52,12 +68,40 @@ export class TransactionService {
     return this.sendTransfer(userId, dto);
   }
 
-  async getHistory(userId: string) {
-    return this.prisma.transaction.findMany({
+  async getHistory(userId: string, options: GetHistoryOptions = {}): Promise<PaginatedHistory> {
+    const rawLimit = options.limit ?? HISTORY_DEFAULT_LIMIT;
+
+    if (rawLimit > HISTORY_MAX_LIMIT) {
+      throw new BadRequestException(
+        `limit must not exceed ${HISTORY_MAX_LIMIT}. Received: ${rawLimit}`,
+      );
+    }
+
+    const limit = Math.max(1, rawLimit);
+    const cursor = options.cursor;
+
+    // Total count for the user — used for "X of N" UI labels.
+    const total = await this.prisma.transaction.count({ where: { userId } });
+
+    // Fetch one extra record beyond the requested limit to determine whether a
+    // next page exists without a separate query.
+    const rows = await this.prisma.transaction.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
-      take: 50,
+      take: limit + 1,
+      ...(cursor
+        ? {
+            cursor: { id: cursor },
+            skip: 1, // skip the cursor row itself
+          }
+        : {}),
     });
+
+    const hasNextPage = rows.length > limit;
+    const data = hasNextPage ? rows.slice(0, limit) : rows;
+    const nextCursor = hasNextPage ? data[data.length - 1].id : null;
+
+    return { data, nextCursor, total };
   }
 
   async getTransactionsByWallet(walletId: string) {
