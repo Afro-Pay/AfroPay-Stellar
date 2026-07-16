@@ -8,6 +8,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AuthModule } from '../auth/auth.module';
 import { KycModule } from '../kyc/kyc.module';
+import { AnchorModule } from '../anchor/anchor.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { KycModule } from '../kyc/kyc.module';
     WalletModule,
     AuthModule,
     KycModule,
+    AnchorModule,
   ],
   providers: [TransactionService, TransactionProcessor, TransferSimulationService],
   controllers: [TransactionController],

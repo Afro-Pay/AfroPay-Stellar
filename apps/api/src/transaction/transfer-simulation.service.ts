@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { AnchorService } from '../anchor/anchor.service';
 
 export type SimulatedAssetCode = 'XLM' | 'USDC' | 'NGN';
 export type SimulationStatus = 'ok' | 'blocked';
@@ -25,6 +26,8 @@ export interface TransferSimulationResult {
   minimumDestinationAmount: string | null;
   effectiveRate: number | null;
   issues: TransferSimulationIssue[];
+  rateExpiresAt: string | null;
+  rateFresh: boolean;
 }
 
 const DEFAULT_RATES: Record<string, number> = {
@@ -44,9 +47,11 @@ function decimalString(value: number): string {
 
 @Injectable()
 export class TransferSimulationService {
-  simulate(scenario: TransferSimulationScenario): TransferSimulationResult {
+  constructor(private readonly anchorService: AnchorService) {}
+
+  async simulate(scenario: TransferSimulationScenario): Promise<TransferSimulationResult> {
     const amount = Number(scenario.sourceAmount);
-    const rates = { ...DEFAULT_RATES, ...(scenario.rates ?? {}) };
+    const staticRates = { ...DEFAULT_RATES, ...(scenario.rates ?? {}) };
     const issues: TransferSimulationIssue[] = [];
 
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -63,7 +68,7 @@ export class TransferSimulationService {
       });
     }
 
-    const path = this.resolvePath(scenario.sourceAsset, scenario.destinationAsset, rates);
+    const path = this.resolvePath(scenario.sourceAsset, scenario.destinationAsset, staticRates);
     if (!path) {
       issues.push({
         code: 'NO_PATH',
@@ -71,7 +76,76 @@ export class TransferSimulationService {
       });
     }
 
-    if (issues.length > 0 || !path) {
+    let rateFresh = true;
+    const expiresAts: (string | null)[] = [];
+    const resolvedRates: Record<string, number> = {};
+
+    if (path) {
+      for (let i = 0; i < path.length - 1; i++) {
+        const from = path[i];
+        const to = path[i + 1];
+        const key = rateKey(from, to);
+        const staticDefaultRate = DEFAULT_RATES[key];
+        const fallbackRate = staticRates[key];
+
+        let fetchedRate: number | null = null;
+        let rateExpiresAtStr: string | null = null;
+
+        try {
+          const result = await this.anchorService.getFxRate(from, to);
+          if (result && typeof result.rate === 'number') {
+            fetchedRate = result.rate;
+            rateExpiresAtStr = result.rate_expires_at ?? null;
+          }
+        } catch (e) {
+          // ignore, fall back
+        }
+
+        if (fetchedRate !== null) {
+          resolvedRates[key] = fetchedRate;
+          expiresAts.push(rateExpiresAtStr);
+
+          if (staticDefaultRate !== undefined) {
+            const divergence = Math.abs(fetchedRate - staticDefaultRate) / staticDefaultRate;
+            if (divergence > 0.05) {
+              issues.push({
+                code: 'STALE_RATE',
+                message: `Live rate for ${from}:${to} deviates from the static default by more than 5%.`,
+              });
+            }
+          }
+        } else {
+          resolvedRates[key] = fallbackRate;
+          rateFresh = false;
+          expiresAts.push(null);
+        }
+      }
+    }
+
+    let rateExpiresAt: string | null = null;
+    if (rateFresh && expiresAts.length > 0) {
+      let minExpiresAt: Date | null = null;
+      let hasNullExpiry = false;
+      for (const exp of expiresAts) {
+        if (exp === null) {
+          hasNullExpiry = true;
+        } else {
+          const date = new Date(exp);
+          if (!minExpiresAt || date < minExpiresAt) {
+            minExpiresAt = date;
+          }
+        }
+      }
+      rateExpiresAt = (hasNullExpiry || !minExpiresAt) ? null : minExpiresAt.toISOString();
+    } else {
+      rateExpiresAt = null;
+    }
+
+    const hasBlockingIssues = issues.some((issue) =>
+      ['INVALID_AMOUNT', 'MISSING_DESTINATION_TRUSTLINE', 'NO_PATH'].includes(issue.code),
+    );
+
+    if (hasBlockingIssues || !path) {
       return {
         status: 'blocked',
         path: path ?? [scenario.sourceAsset, scenario.destinationAsset],
@@ -80,10 +154,12 @@ export class TransferSimulationService {
         minimumDestinationAmount: null,
         effectiveRate: null,
         issues,
+        rateExpiresAt,
+        rateFresh,
       };
     }
 
-    const effectiveRate = this.effectiveRate(path, rates);
+    const effectiveRate = this.effectiveRate(path, resolvedRates);
     const estimatedDestinationAmount = amount * effectiveRate;
     const slippageBps = scenario.maxSlippageBps ?? 50;
     const minimumDestinationAmount = estimatedDestinationAmount * (1 - slippageBps / 10_000);
@@ -96,11 +172,13 @@ export class TransferSimulationService {
       minimumDestinationAmount: decimalString(minimumDestinationAmount),
       effectiveRate,
       issues,
+      rateExpiresAt,
+      rateFresh,
     };
   }
 
-  simulateBatch(scenarios: TransferSimulationScenario[]): TransferSimulationResult[] {
-    return scenarios.map((scenario) => this.simulate(scenario));
+  async simulateBatch(scenarios: TransferSimulationScenario[]): Promise<TransferSimulationResult[]> {
+    return Promise.all(scenarios.map((scenario) => this.simulate(scenario)));
   }
 
   private resolvePath(
