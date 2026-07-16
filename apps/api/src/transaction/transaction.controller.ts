@@ -1,19 +1,15 @@
-import { Body, Controller, Get, Param, Post, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Request, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
-import { TransactionService, SendTransferDto } from './transaction.service';
-import { IsOptional, IsString } from 'class-validator';
+import { TransactionService } from './transaction.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { KycGuard } from '../kyc/kyc.guard';
 import { RateLimit } from '../rate-limit/rate-limit.decorator';
-import { SendDto, TransactionResponseDto } from './dto';
-
-class SendDto implements SendTransferDto {
-  @IsString() destinationPublicKey: string;
-  @IsString() amount: string;
-  @IsString() assetCode: string;
-  @IsOptional() @IsString() assetIssuer?: string;
-  @IsOptional() @IsString() memo?: string;
-}
+import {
+  GetHistoryQueryDto,
+  PaginatedHistoryDto,
+  SendDto,
+  TransactionResponseDto,
+} from './dto';
 
 @ApiTags('transaction')
 @Controller('transaction')
@@ -40,21 +36,24 @@ export class TransactionController {
   @ApiResponse({ status: 400, description: 'Invalid transaction data' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 402, description: 'Insufficient funds' })
-  async sendPayment(@Body() sendDto: SendDto) {
-    return this.transactionService.sendPayment(sendDto);
+  async sendPayment(@Request() req: any, @Body() sendDto: SendDto) {
+    return this.transactionService.sendPayment(req.user.userId, sendDto);
   }
 
   @Get('history')
-  @ApiOperation({ summary: 'Get transaction history' })
+  @ApiOperation({ summary: 'Get paginated transaction history' })
   @ApiResponse({
     status: 200,
-    description: 'Transaction history retrieved',
-    type: [TransactionResponseDto],
+    description: 'Paginated transaction history',
+    type: PaginatedHistoryDto,
   })
+  @ApiResponse({ status: 400, description: 'Invalid pagination parameters (limit > 100)' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 404, description: 'Wallet not found' })
-  history(@Request() req: any) {
-    return this.transactionService.getHistory(req.user.userId);
+  history(@Request() req: any, @Query() query: GetHistoryQueryDto) {
+    return this.transactionService.getHistory(req.user.userId, {
+      limit: query.limit,
+      cursor: query.cursor,
+    });
   }
 
   @Get(':id')

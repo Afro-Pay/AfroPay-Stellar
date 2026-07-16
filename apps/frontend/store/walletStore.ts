@@ -9,8 +9,10 @@ interface WalletStore {
     assetCode: string; assetIssuer?: string; memo?: string;
   }) => Promise<{ txId?: string }>;
   simulateTransfer: (data: {
-    destinationPublicKey: string; amount: string;
-    assetCode: string; assetIssuer?: string;
+    destinationPublicKey: string;
+    amount: string;
+    assetCode: string;
+    assetIssuer?: string;
   }) => Promise<SimulationResult>;
 }
 
