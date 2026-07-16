@@ -14,7 +14,7 @@ interface WalletStore {
   publicKey: string | null;
   isLoading: boolean;
   error: string | null;
-  fetchBalances: () => Promise<void>;
+  fetchBalances: (afterTxHash?: string) => Promise<void>;
   fetchTransactions: () => Promise<void>;
   sendTransfer: (data: {
     destinationPublicKey: string; amount: string;
@@ -22,18 +22,19 @@ interface WalletStore {
   }) => Promise<void>;
 }
 
-export const useWalletStore = create<WalletStore>((set) => ({
+export const useWalletStore = create<WalletStore>((set, get) => ({
   balances: [],
   transactions: [],
   publicKey: null,
   isLoading: false,
   error: null,
 
-  fetchBalances: async () => {
+  fetchBalances: async (afterTxHash?: string) => {
     set({ isLoading: true, error: null });
     try {
-      const { data } = await api.get('/wallet/balances');
-      set({ balances: data, isLoading: false });
+      const url = afterTxHash ? `/wallet/balances?afterTxHash=${afterTxHash}` : '/wallet/balances';
+      const { data } = await api.get(url);
+      set({ balances: data.balances || data, isLoading: false });
     } catch (err) {
       set({
         isLoading: false,
@@ -56,6 +57,12 @@ export const useWalletStore = create<WalletStore>((set) => ({
   },
 
   sendTransfer: async (payload) => {
-    await api.post('/transactions/send', payload);
+    const { data } = await api.post('/transactions/send', payload);
+    // After successful transfer, poll for updated balance using txId as afterTxHash
+    if (data?.txId) {
+      await get().fetchBalances(data.txId);
+    } else {
+      await get().fetchBalances();
+    }
   },
 }));
