@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
+import Redis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
 
@@ -73,12 +74,20 @@ export class TransactionService {
     status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED',
     stellarTxHash?: string,
   ) {
-    return this.prisma.transaction.update({
+    const updated = await this.prisma.transaction.update({
       where: { id: txId },
       data: {
         status,
         ...(stellarTxHash ? { stellarTxHash } : {}),
       },
     });
+
+    if (status === 'SUCCESS') {
+      const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+      await redis.del(`wallet_balances:${updated.userId}`);
+      redis.disconnect();
+    }
+
+    return updated;
   }
 }

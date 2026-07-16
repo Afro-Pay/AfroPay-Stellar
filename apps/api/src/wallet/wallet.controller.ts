@@ -1,5 +1,5 @@
-import { Controller, Post, Param, UseGuards, Request, BadRequestException } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Post, Get, Param, Query, UseGuards, Request, BadRequestException } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { WalletService } from './wallet.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -31,5 +31,16 @@ export class WalletController {
       transactionHash: result.transactionHash,
       cosignerPublicKey: result.cosignerPublicKey,
     };
+  }
+
+  @Get('balances')
+  @ApiOperation({ summary: 'Get wallet balances' })
+  @ApiQuery({ name: 'afterTxHash', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Returns wallet balances' })
+  async getBalances(
+    @Request() req: any,
+    @Query('afterTxHash') afterTxHash?: string,
+  ) {
+    return this.walletService.getBalances(req.user.userId, afterTxHash);
   }
 }
