@@ -42,9 +42,6 @@ describe("RateLimitGuardRedis", () => {
   const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
   const limiter = new RedisRateLimiter(redisUrl, "rate-limit-test");
 
-  // Extra limiters created inside individual tests that must be cleaned up.
-  const extraLimiters: RedisRateLimiter[] = [];
-
   const keyPrefix = "auth:login";
 
   beforeEach(() => {
@@ -58,8 +55,6 @@ describe("RateLimitGuardRedis", () => {
 
   afterAll(async () => {
     await limiter.close();
-    // Close any limiters created inside individual tests to release TCP handles.
-    await Promise.all(extraLimiters.map((l) => l.close()));
   });
 
   it("allows routes without rate limit metadata", () => {
@@ -78,13 +73,14 @@ describe("RateLimitGuardRedis", () => {
     };
 
     // Simulate two instances (two pods) by using two separate guard objects.
-    // The limiters are closed in afterAll to avoid open TCP handles.
-    const limiterA = new RedisRateLimiter(redisUrl, "rate-limit-test");
-    const limiterB = new RedisRateLimiter(redisUrl, "rate-limit-test");
-    extraLimiters.push(limiterA, limiterB);
-
-    const instanceA = guardFor(options, limiterA);
-    const instanceB = guardFor(options, limiterB);
+    const instanceA = guardFor(
+      options,
+      new RedisRateLimiter(redisUrl, "rate-limit-test"),
+    );
+    const instanceB = guardFor(
+      options,
+      new RedisRateLimiter(redisUrl, "rate-limit-test"),
+    );
 
     const request = { ip: "203.0.113.10", headers: {} };
 

@@ -53,9 +53,6 @@ export class TransactionController {
     return this.transactionService.getHistory(req.user.userId, {
       limit: query.limit,
       cursor: query.cursor,
-      status: query.status,
-      currency: query.currency,
-      dateRange: query.dateRange,
     });
   }
 

@@ -11,8 +11,7 @@ export default function Dashboard() {
   const router = useRouter();
   const { publicKey, setPublicKey } = useWalletStore();
   const { data: balances = [], isLoading, error } = useBalances();
-  const { data: txPage, isLoading: txLoading } = useTransactions();
-  const transactions = txPage?.data ?? [];
+  const { data: transactions = [] } = useTransactions();
 
   useEffect(() => {
     const token = localStorage.getItem("token");
