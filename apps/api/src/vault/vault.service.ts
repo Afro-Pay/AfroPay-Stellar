@@ -51,12 +51,14 @@ export class VaultService {
   }
 
   private deriveUserKey(userId: string): Buffer {
-    return crypto.hkdfSync(
-      'sha256',
-      this.getMasterKey(),
-      Buffer.alloc(16),
-      Buffer.from(userId, 'utf8'),
-      32,
+    return Buffer.from(
+      crypto.hkdfSync(
+        'sha256',
+        this.getMasterKey(),
+        Buffer.alloc(16),
+        Buffer.from(userId, 'utf8'),
+        32,
+      ),
     );
   }
 

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
@@ -13,17 +13,67 @@ interface RefreshTokenPayload {
 export class AuthService {
   constructor(private prisma: PrismaService, private jwt: JwtService) {}
 
-  async register(email: string, password: string) {
-    const hash = await bcrypt.hash(password, 10);
+  async register(emailOrDto: string | any, password?: string) {
+    let email = '';
+    let pass = '';
+    if (typeof emailOrDto === 'object' && emailOrDto !== null) {
+      email = emailOrDto.email;
+      pass = emailOrDto.password;
+    } else {
+      email = emailOrDto;
+      pass = password;
+    }
+
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      throw new ConflictException('Email already registered');
+    }
+
+    const hash = await bcrypt.hash(pass, 10);
     const user = await this.prisma.user.create({ data: { email, password: hash } });
     return this.signToken(user.id, user.email);
   }
 
-  async login(email: string, password: string) {
+  async login(emailOrDto: string | any, password?: string) {
+    let email = '';
+    let pass = '';
+    if (typeof emailOrDto === 'object' && emailOrDto !== null) {
+      email = emailOrDto.email;
+      pass = emailOrDto.password;
+    } else {
+      email = emailOrDto;
+      pass = password;
+    }
     const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user || !(await bcrypt.compare(password, user.password)))
+    if (!user) throw new UnauthorizedException('Invalid credentials');
+    
+    let isMatch = false;
+    try {
+      isMatch = await bcrypt.compare(pass, user.password ?? (user as any).passwordHash);
+    } catch {
       throw new UnauthorizedException('Invalid credentials');
+    }
+    
+    if (!isMatch) throw new UnauthorizedException('Invalid credentials');
     return this.signToken(user.id, user.email);
+  }
+
+  validateToken(token: string) {
+    return this.jwt.verify(token);
+  }
+
+  async refreshToken(oldToken: string) {
+    const decoded = this.jwt.verify<RefreshTokenPayload>(oldToken);
+    const user = await this.prisma.user.findUnique({ where: { id: decoded.sub } });
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+    const tokens = this.signToken(user.id, user.email);
+    return { accessToken: tokens.access_token };
+  }
+
+  async logout() {
+    return { success: true };
   }
 
   async refreshSession(refreshToken: string) {

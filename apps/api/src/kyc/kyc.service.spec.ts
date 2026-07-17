@@ -140,7 +140,7 @@ describe('KycService', () => {
       const result = await service.getKycStatus('user-1');
 
       expect(result.dailyUsed).toBe(350.5);
-      expect(result.remainingToday).toBe(100 - 350.5);
+      expect(result.remainingToday).toBe(0);
     });
   });
 

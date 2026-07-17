@@ -13,6 +13,7 @@ enum TransactionStatus {
   RETRYING
   SUCCESS
   FAILED
+  REVIEW
 }
 
 /// Allowed lifecycle states for KYC records.

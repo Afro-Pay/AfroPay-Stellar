@@ -12,7 +12,7 @@ import {
 } from './dto';
 
 @ApiTags('transaction')
-@Controller('transaction')
+@Controller(['transaction', 'transactions'])
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth('JWT-auth')
 export class TransactionController {
@@ -70,5 +70,16 @@ export class TransactionController {
   @ApiResponse({ status: 404, description: 'Transaction not found' })
   get(@Param('id') id: string, @Request() req: any) {
     return this.transactionService.getTransaction(id, req.user?.userId);
+  }
+
+  @Post(':id/risk')
+  @ApiOperation({ summary: 'Update transaction risk score and flagged status' })
+  @ApiResponse({ status: 200, description: 'Risk updated successfully' })
+  @ApiResponse({ status: 404, description: 'Transaction not found' })
+  async updateRisk(
+    @Param('id') id: string,
+    @Body() body: { riskScore: number; flagged: boolean },
+  ) {
+    return this.transactionService.updateRiskScore(id, body.riskScore, body.flagged);
   }
 }

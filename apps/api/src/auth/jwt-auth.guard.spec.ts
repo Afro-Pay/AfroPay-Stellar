@@ -11,18 +11,18 @@ describe('JwtAuthGuard', () => {
   it('returns the authenticated user when Passport validation succeeds', () => {
     const user = { userId: 'user-123', email: 'user@example.com' };
 
-    expect(guard.handleRequest(null, user, null, {} as any)).toBe(user);
+    expect(guard.handleRequest(null, user, null)).toBe(user);
   });
 
   it('returns a distinct auth-expired response for expired access tokens', () => {
     const expiredAt = new Date('2026-01-01T00:00:00.000Z');
 
     expect(() =>
-      guard.handleRequest(null, null, { name: 'TokenExpiredError', expiredAt }, {} as any),
+      guard.handleRequest(null, null, { name: 'TokenExpiredError', expiredAt }),
     ).toThrow(UnauthorizedException);
 
     try {
-      guard.handleRequest(null, null, { name: 'TokenExpiredError', expiredAt }, {} as any);
+      guard.handleRequest(null, null, { name: 'TokenExpiredError', expiredAt });
     } catch (error) {
       const exception = error as UnauthorizedException;
       expect(exception.getResponse()).toMatchObject({
@@ -35,7 +35,7 @@ describe('JwtAuthGuard', () => {
 
   it('returns a distinct auth-invalid response for missing or malformed tokens', () => {
     try {
-      guard.handleRequest(null, null, { name: 'JsonWebTokenError' }, {} as any);
+      guard.handleRequest(null, null, { name: 'JsonWebTokenError' });
     } catch (error) {
       const exception = error as UnauthorizedException;
       expect(exception.getResponse()).toMatchObject({

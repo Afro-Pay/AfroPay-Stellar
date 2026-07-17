@@ -138,16 +138,37 @@ export class TransactionService {
   async getTransaction(txId: string, userId?: string) {
     const tx = await this.prisma.transaction.findUnique({ where: { id: txId } });
     
-    if (userId && tx && tx.userId !== userId) {
+    if (!tx || (userId && tx.userId !== userId)) {
       throw new NotFoundException('Transaction not found');
     }
     
     return tx;
   }
 
+  async updateRiskScore(txId: string, riskScore: number, flagged: boolean) {
+    const tx = await this.prisma.transaction.findUnique({ where: { id: txId } });
+    if (!tx) {
+      throw new NotFoundException('Transaction not found');
+    }
+
+    const data: any = {
+      riskScore,
+      flagged,
+    };
+
+    if (flagged && (tx.status === 'PENDING' || tx.status === 'RETRYING')) {
+      data.status = 'REVIEW';
+    }
+
+    return this.prisma.transaction.update({
+      where: { id: txId },
+      data,
+    });
+  }
+
   async updateTransactionStatus(
     txId: string,
-    status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED',
+    status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED' | 'REVIEW',
     stellarTxHash?: string,
   ) {
     const updated = await this.prisma.transaction.update({

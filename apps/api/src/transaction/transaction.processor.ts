@@ -1,62 +1,102 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { QueueService } from '../queue/queue.service';
-import { ExchangeService } from '../exchange/exchange.service';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { WalletService } from '../wallet/wallet.service';
+import {
+  Horizon,
+  TransactionBuilder,
+  Networks,
+  Operation,
+  Asset,
+  BASE_FEE,
+} from 'stellar-sdk';
+
+const server = new Horizon.Server(process.env.STELLAR_HORIZON_URL ?? 'https://horizon-testnet.stellar.org');
+const network = process.env.STELLAR_NETWORK === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
 
 @Injectable()
 export class TransactionProcessor {
   private readonly logger = new Logger(TransactionProcessor.name);
-  private readonly thresholdUsd: number;
 
   constructor(
-    private configService: ConfigService,
-    private queueService: QueueService,
-    private exchangeService: ExchangeService,
-  ) {
-    this.thresholdUsd = this.configService.get<number>('MULTISIG_THRESHOLD_USD', 10000);
-  }
+    private prisma: PrismaService,
+    private walletService: WalletService,
+  ) {}
 
-  async processTransaction(transactionData: any): Promise<void> {
-    // Get amount in USD for threshold check
-    const amountUsd = await this.convertToUsd(
-      transactionData.amount,
-      transactionData.asset_code,
-    );
+  async processTransaction(txId: string): Promise<any> {
+    const tx = await this.prisma.transaction.findUnique({
+      where: { id: txId },
+    });
 
-    const requiresCosign = this.requiresCosign(amountUsd);
-
-    // Create job with requires_cosign flag
-    const job = {
-      ...transactionData,
-      requiresCosign,
-      thresholdUsd: this.thresholdUsd,
-    };
-
-    // Send to queue
-    await this.queueService.sendJob(job);
-
-    this.logger.log(
-      `Transaction ${transactionData.id} requires cosign: ${requiresCosign}`,
-    );
-
-    // Log if above threshold
-    if (requiresCosign) {
-      this.logger.warn(
-        `High-value transaction ${transactionData.id}: $${amountUsd} USD exceeds threshold $${this.thresholdUsd}. Multi-signature required.`,
-      );
+    if (!tx) {
+      throw new Error('Transaction not found');
     }
-  }
 
-  private async convertToUsd(
-    amount: string,
-    assetCode: string,
-  ): Promise<number> {
-    // Convert amount to USD using exchange service
-    const rate = await this.exchangeService.getRate(assetCode, 'USD');
-    return parseFloat(amount) * rate;
-  }
+    // Check if flagged for fraud
+    if (tx.flagged) {
+      this.logger.warn(`Transaction ${txId} is flagged as suspicious. Holding in REVIEW status.`);
+      const updated = await this.prisma.transaction.update({
+        where: { id: txId },
+        data: { status: 'REVIEW' },
+      });
+      return updated;
+    }
 
-  private requiresCosign(amountUsd: number): boolean {
-    return amountUsd > this.thresholdUsd;
+    try {
+      const keypair = await this.walletService.getKeypair(tx.userId);
+      const sourceAccount = await server.loadAccount(keypair.publicKey());
+
+      const asset = tx.assetCode === 'XLM' ? Asset.native() : new Asset(tx.assetCode, tx.assetIssuer || undefined);
+
+      const txBuilder = new TransactionBuilder(sourceAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: network,
+      })
+        .addOperation(
+          Operation.payment({
+            destination: tx.destination,
+            asset,
+            amount: tx.amount,
+          }),
+        )
+        .setTimeout(30);
+
+      if (tx.memo) {
+        txBuilder.addMemo({ value: tx.memo } as any);
+      }
+
+      const transaction = txBuilder.build();
+      transaction.sign(keypair);
+
+      const result = await server.submitTransaction(transaction);
+
+      const updated = await this.prisma.transaction.update({
+        where: { id: txId },
+        data: {
+          status: 'SUCCESS',
+          stellarTxHash: result.hash,
+        },
+      });
+
+      this.logger.log(`Transaction ${txId} succeeded: ${result.hash}`);
+      return updated;
+    } catch (err: any) {
+      const attempt = (tx as any).retryCount ?? 0;
+      const isFinalAttempt = attempt >= 2; // max 3 attempts (0, 1, 2)
+      const reason = err instanceof Error ? err.message : String(err);
+
+      this.logger.error(
+        `Transaction ${txId} attempt ${attempt + 1}/3 failed: ${reason}`,
+      );
+
+      const updated = await this.prisma.transaction.update({
+        where: { id: txId },
+        data: {
+          status: isFinalAttempt ? 'FAILED' : 'RETRYING',
+          retryCount: attempt + 1,
+        } as any,
+      });
+
+      return updated;
+    }
   }
 }
