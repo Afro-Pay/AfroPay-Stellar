@@ -1,67 +1,38 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { GlobalExceptionFilter } from './common/filters';
+import { Logger } from 'nestjs-pino';
+import { ValidationPipe } from '@nestjs/common';
+import { CorrelationIdInterceptor } from './common/interceptors/correlation-id.interceptor';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    bufferLogs: true,
+  });
 
-  // ── Centralised error handling ──────────────────────────────────────────────
-  // GlobalExceptionFilter must be registered first so it wraps all errors,
-  // including those thrown by the ValidationPipe below.
-  app.useGlobalFilters(new GlobalExceptionFilter());
+  // Use Pino logger
+  app.useLogger(app.get(Logger));
 
-  // Global ValidationPipe — transforms & validates all incoming DTOs.
-  // Errors are caught by GlobalExceptionFilter and formatted consistently.
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,          // strip properties not in the DTO
-      forbidNonWhitelisted: true, // error on unknown properties
-      transform: true,          // auto-transform payloads to DTO instances
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
-    }),
-  );
+  // Global validation pipe
+  app.useGlobalPipes(new ValidationPipe({
+    whitelist: true,
+    transform: true,
+  }));
 
-  // Swagger configuration (only in development)
-  if (process.env.NODE_ENV !== 'production') {
-    const config = new DocumentBuilder()
-      .setTitle('AfroPay-Stellar API')
-      .setDescription('API documentation for AfroPay-Stellar')
-      .setVersion('1.0')
-      .addBearerAuth(
-        {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT',
-          name: 'JWT',
-          description: 'Enter JWT token',
-          in: 'header',
-        },
-        'JWT-auth',
-      )
-      .addTag('auth', 'Authentication endpoints')
-      .addTag('wallet', 'Wallet management endpoints')
-      .addTag('transaction', 'Transaction management endpoints')
-      .addTag('anchor', 'Anchor endpoints')
-      .build();
+  // Global correlation ID interceptor
+  app.useGlobalInterceptors(new CorrelationIdInterceptor());
 
-    const document = SwaggerModule.createDocument(app, config);
-    SwaggerModule.setup('api/docs', app, document, {
-      swaggerOptions: {
-        persistAuthorization: true,
-        tagsSorter: 'alpha',
-        operationsSorter: 'alpha',
-      },
-    });
+  // CORS
+  app.enableCors({
+    origin: process.env.CORS_ORIGIN || '*',
+  });
 
-    console.log('📚 Swagger documentation available at /api/docs');
-  }
+  // Global prefix
+  app.setGlobalPrefix('api');
 
   const port = process.env.PORT || 3000;
   await app.listen(port);
-  console.log(`🚀 Application is running on: http://localhost:${port}`);
+  
+  const logger = app.get(Logger);
+  logger.info(`🚀 Application running on port ${port}`);
 }
 bootstrap();
