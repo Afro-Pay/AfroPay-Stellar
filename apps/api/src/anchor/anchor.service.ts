@@ -1,13 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import axios from 'axios';
 import Redis from 'ioredis';
+import {
+  CircuitBreakerState,
+  FxRateCachePayload,
+  FxRateResult,
+} from './fx-rate.types';
 
 const ANCHORS: Record<string, string> = {
   USDC: process.env.ANCHOR_USDC_URL ?? 'https://testanchor.stellar.org',
   NGN: process.env.ANCHOR_NGN_URL ?? 'https://testanchor.stellar.org',
 };
 
-const CACHE_TTL_SECONDS = 30; // cap TTL at 30 seconds
 const DELTA_THRESHOLD = 0.005; // 0.5%
 
 // Simple in-memory redis-like cache used for tests or when REDIS_URL is not set
@@ -43,6 +47,22 @@ class InMemoryCache {
 export class AnchorService {
   private redis: any;
 
+  // Freshness bound: a rate older than this is still served, but with stale: true.
+  private maxCacheAgeSeconds = Number(process.env.FX_MAX_CACHE_AGE_SECONDS ?? 30);
+  // Retention bound: physical Redis TTL. Longer than the freshness bound so a
+  // rate survives to be served (flagged stale) while the anchor is unreachable.
+  private cacheRetentionSeconds = Number(
+    process.env.FX_CACHE_RETENTION_SECONDS ?? 300,
+  );
+  private circuitFailureThreshold = Number(
+    process.env.FX_CIRCUIT_FAILURE_THRESHOLD ?? 3,
+  );
+  private circuitResetMs = Number(process.env.FX_CIRCUIT_RESET_MS ?? 60000);
+
+  // Keyed per currency pair so an outage on one corridor does not open the
+  // circuit for healthy ones.
+  private breakers = new Map<string, CircuitBreakerState>();
+
   constructor() {
     const redisUrl = process.env.REDIS_URL;
     // Use in-memory cache for tests or if no REDIS_URL configured
@@ -76,57 +96,119 @@ export class AnchorService {
     return { rate: rates[`${from}-${to}`] ?? null, from, to };
   }
 
-  async getFxRate(from: string, to: string) {
+  async getFxRate(from: string, to: string): Promise<FxRateResult> {
     const normFrom = from === 'USDC' ? 'USD' : from;
     const normTo = to === 'USDC' ? 'USD' : to;
     const key = `fx:${normFrom}:${normTo}`;
 
-    // Try to read cached value
-    const cachedRaw = await this.redis.get(key);
-    let cached: { rate: number | null; from: string; to: string; fetchedAt?: number } | null = null;
-    if (cachedRaw) {
-      try { cached = JSON.parse(cachedRaw); } catch (e) { cached = null; }
+    const cached = await this.readCache(key);
+    const breaker = this.getBreaker(key);
+
+    // Circuit open: serve cached without touching the anchor. Once
+    // circuitResetMs has elapsed, isCircuitOpen() returns false and the next
+    // call falls through to a half-open probe fetch below.
+    if (this.isCircuitOpen(breaker)) {
+      return this.buildCachedResult(cached, from, to, true);
     }
 
-    // Fetch latest from provider to decide whether to bust cache
-    const external = await this.fetchExternalRate(normFrom, normTo);
-
-    // If neither external nor cached exist, return null
-    if (!external.rate && !cached) {
-      return { rate: null, from, to, rate_expires_at: null };
-    }
-
-    // If no cached value, store external and return
-    if (!cached) {
-      if (external.rate != null) {
-        const payload = { rate: external.rate, from: normFrom, to: normTo, fetchedAt: Date.now() };
-        await this.redis.set(key, JSON.stringify(payload), 'EX', CACHE_TTL_SECONDS);
-        const expiresAt = new Date(Date.now() + CACHE_TTL_SECONDS * 1000).toISOString();
-        return { rate: payload.rate, from, to, rate_expires_at: expiresAt };
-      }
-      // external null but cached handled earlier, so shouldn't reach here
-      return { rate: null, from, to, rate_expires_at: null };
-    }
-
-    // If we have both cached and an external rate, compare delta
-    if (external.rate != null && cached.rate != null) {
-      const delta = Math.abs(external.rate - cached.rate) / external.rate;
-      if (delta > DELTA_THRESHOLD) {
-        // Significant change: update cache immediately with external
-        const payload = { rate: external.rate, from: normFrom, to: normTo, fetchedAt: Date.now() };
-        await this.redis.set(key, JSON.stringify(payload), 'EX', CACHE_TTL_SECONDS);
-        const expiresAt = new Date(Date.now() + CACHE_TTL_SECONDS * 1000).toISOString();
-        return { rate: payload.rate, from, to, rate_expires_at: expiresAt };
+    let external: { rate: number | null } | null = null;
+    try {
+      external = await this.fetchExternalRate(normFrom, normTo);
+      breaker.consecutiveFailures = 0;
+      breaker.openedAt = null;
+    } catch (e) {
+      // A pair the provider doesn't quote resolves with rate: null and is NOT
+      // a failure — only an unreachable anchor (a throw) counts toward opening.
+      breaker.consecutiveFailures += 1;
+      if (breaker.consecutiveFailures >= this.circuitFailureThreshold) {
+        breaker.openedAt = Date.now();
       }
     }
 
-    // Otherwise return cached value and compute expiry from TTL
-    const ttlSecs = await this.redis.ttl ? await this.redis.ttl(key) : CACHE_TTL_SECONDS;
-    let expiresAt: string | null = null;
-    if (ttlSecs > 0) {
-      expiresAt = new Date(Date.now() + ttlSecs * 1000).toISOString();
+    if (external && external.rate != null) {
+      // Within the bust threshold the cached rate is kept so quotes stay
+      // stable, but fetchedAt is refreshed: freshness means "the anchor
+      // confirmed this rate recently", not "the rate never moved".
+      let rate = external.rate;
+      if (cached && cached.rate != null) {
+        const delta = Math.abs(external.rate - cached.rate) / external.rate;
+        if (delta <= DELTA_THRESHOLD) {
+          rate = cached.rate;
+        }
+      }
+
+      const payload: FxRateCachePayload = {
+        rate,
+        from: normFrom,
+        to: normTo,
+        fetchedAt: Date.now(),
+      };
+      await this.redis.set(
+        key,
+        JSON.stringify(payload),
+        'EX',
+        this.cacheRetentionSeconds,
+      );
+      return {
+        rate: payload.rate,
+        from,
+        to,
+        rate_expires_at: new Date(
+          payload.fetchedAt + this.maxCacheAgeSeconds * 1000,
+        ).toISOString(),
+        stale: false,
+        circuitOpen: false,
+      };
     }
 
-    return { rate: cached.rate, from, to, rate_expires_at: expiresAt };
+    // Anchor unreachable, or it has no rate for this pair: fall back to cache.
+    // The breaker may have just opened on this very call.
+    return this.buildCachedResult(cached, from, to, this.isCircuitOpen(breaker));
+  }
+
+  private async readCache(key: string): Promise<FxRateCachePayload | null> {
+    const raw = await this.redis.get(key);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  private getBreaker(key: string): CircuitBreakerState {
+    let breaker = this.breakers.get(key);
+    if (!breaker) {
+      breaker = { consecutiveFailures: 0, openedAt: null };
+      this.breakers.set(key, breaker);
+    }
+    return breaker;
+  }
+
+  private isCircuitOpen(breaker: CircuitBreakerState): boolean {
+    return (
+      breaker.openedAt != null &&
+      Date.now() - breaker.openedAt < this.circuitResetMs
+    );
+  }
+
+  private buildCachedResult(
+    cached: FxRateCachePayload | null,
+    from: string,
+    to: string,
+    circuitOpen: boolean,
+  ): FxRateResult {
+    if (!cached || cached.rate == null) {
+      return { rate: null, from, to, rate_expires_at: null, stale: false, circuitOpen };
+    }
+    const expiresAtMs = (cached.fetchedAt ?? 0) + this.maxCacheAgeSeconds * 1000;
+    return {
+      rate: cached.rate,
+      from,
+      to,
+      rate_expires_at: new Date(expiresAtMs).toISOString(),
+      stale: Date.now() > expiresAtMs,
+      circuitOpen,
+    };
   }
 }
