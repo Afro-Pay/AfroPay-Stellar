@@ -154,7 +154,7 @@ This is a BullMQ consumer that processes jobs from the `transactions` queue:
 - Acts as a proxy to external Stellar anchor servers (SEP-6)
 - **Deposit:** `GET {anchor_url}/sep6/deposit?asset_code=X&account=Y`
 - **Withdraw:** `GET {anchor_url}/sep6/withdraw?asset_code=X&account=Y&amount=Z`
-- **FX Rates:** Returns stub rates (USD-NGN: 1550, NGN-USD: 0.00065, XLM-USD: 0.11) — placeholder for a real FX provider
+- **FX Rates:** Returns stub rates (USD-NGN: 1550, NGN-USD: 0.00065, XLM-USD: 0.11) — placeholder for a real FX provider. Rates are cached in Redis with staleness flagging and a per-pair circuit breaker; see [FX Rate Caching, Staleness & Circuit Breaker](#fx-rate-caching-staleness--circuit-breaker).
 - The controller now validates query payloads before the service runs:
   - deposit/withdraw `asset` is limited to `USDC` and `NGN`
   - `account` must match a Stellar public key pattern
@@ -370,6 +370,37 @@ API                        Redis "stellar_jobs"         Rust Worker             
 - `ANCHOR_NGN_URL` — defaults to `https://testanchor.stellar.org`
 
 **Flow:** The API acts as a proxy. The frontend calls the API, which forwards the request to the external anchor server and returns the response. No Stellar SDK calls are made — the anchor handles the on-chain operations.
+
+### FX Rate Caching, Staleness & Circuit Breaker
+
+`AnchorService.getFxRate(from, to)` caches rates in Redis under `fx:<from>:<to>` and separates two concerns that were previously collapsed into a single TTL:
+
+- **Freshness** (`FX_MAX_CACHE_AGE_SECONDS`, default `30`) — how old a rate may be and still count as live. `rate_expires_at` in the response is always `fetchedAt + FX_MAX_CACHE_AGE_SECONDS`.
+- **Retention** (`FX_CACHE_RETENTION_SECONDS`, default `300`) — the physical Redis TTL. It is deliberately longer than the freshness bound so that a rate survives to be served (flagged as stale) while the anchor is unreachable. After this window expires, `rate` is `null`.
+
+Every response carries two flags:
+
+| Field | Meaning |
+|---|---|
+| `stale` | `true` when the served rate is older than `FX_MAX_CACHE_AGE_SECONDS`. Fresh fetches always return `stale: false`. |
+| `circuitOpen` | `true` when the rate was served from cache while the circuit breaker is open (no anchor request was made). |
+
+**Cache behaviour on a successful fetch:** if the newly fetched rate moves more than 0.5% (`DELTA_THRESHOLD`) from the cached one, the cache is busted and the new rate served immediately. Within the threshold, the cached rate is kept for quote stability but `fetchedAt` is refreshed — `stale` therefore means "the anchor has not confirmed this rate recently", not "the rate has not changed".
+
+**Circuit breaker:** state is kept **per currency pair**, so an outage on one corridor (e.g. NGN→USD) does not stop quoting on healthy ones.
+
+1. Only a *thrown* fetch (anchor unreachable) counts as a failure. A pair the provider does not quote (`rate: null`) is a successful response and never trips the breaker.
+2. After `FX_CIRCUIT_FAILURE_THRESHOLD` (default `3`) consecutive failures the circuit opens: subsequent calls serve cached data with `circuitOpen: true` and make **no** anchor requests.
+3. After `FX_CIRCUIT_RESET_MS` (default `60000`) the circuit half-opens: the next call performs one real probe fetch. On success the circuit closes and failure counts reset; on failure it re-opens for another reset window.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `FX_MAX_CACHE_AGE_SECONDS` | `30` | Freshness bound; older rates are served with `stale: true` |
+| `FX_CACHE_RETENTION_SECONDS` | `300` | Physical Redis TTL — the serve-stale window during outages |
+| `FX_CIRCUIT_FAILURE_THRESHOLD` | `3` | Consecutive failures before the circuit opens |
+| `FX_CIRCUIT_RESET_MS` | `60000` | How long the circuit stays open before a half-open probe |
+
+**Known limitation:** breaker state lives in process memory. With N API replicas, each replica trips its own breaker independently, so a dead anchor may receive up to N probe requests per reset window. Moving breaker state to Redis (as done for rate limiting) is a possible follow-up.
 
 ---
 
