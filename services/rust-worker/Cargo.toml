@@ -3,6 +3,8 @@ name = "rust-worker"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+
 [[bin]]
 name = "worker"
 path = "src/main.rs"
