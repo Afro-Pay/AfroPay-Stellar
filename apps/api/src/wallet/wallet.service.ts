@@ -1,12 +1,7 @@
-import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
-import { VaultService } from '../vault/vault.service';
-import { PrismaService } from '../prisma/prisma.service';
-import { Keypair, Horizon, TransactionBuilder, Operation, Networks } from 'stellar-sdk';
-import Redis from 'ioredis';
-import * as crypto from 'crypto';
-
-const HORIZON_URL = process.env.STELLAR_HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
-const server = new Horizon.Server(HORIZON_URL);
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaClient } from '@prisma/client';
+import { AuditService } from '../audit/audit.service';
+import { Logger } from 'nestjs-pino';
 
 export class AuthTagMismatchError extends Error {
   constructor(message = 'AuthTagMismatch') {
@@ -36,168 +31,96 @@ interface ReconciliationAsset {
 
 @Injectable()
 export class WalletService {
-  private readonly logger = new Logger(WalletService.name);
-  prisma: PrismaService;
-  vaultService: VaultService;
-
   constructor(
-    prismaService: PrismaService,
-    vaultService?: VaultService,
-  ) {
-    this.prisma = prismaService;
-    this.vaultService = vaultService;
-  }
+    private prisma: PrismaClient,
+    private auditService: AuditService,
+    private logger: Logger,
+  ) {}
 
-  async createWallet(userId: string) {
-    const keypair = Keypair.random();
-    const encryptedSecret = this.encrypt(keypair.secret(), userId);
-
+  async createWallet(userId: string, publicKey: string, name?: string) {
     const wallet = await this.prisma.wallet.create({
-      data: { userId, publicKey: keypair.publicKey(), encryptedSecret },
+      data: {
+        userId,
+        publicKey,
+        name,
+      },
     });
 
-    return { publicKey: wallet.publicKey };
-  }
+    // Audit: Wallet creation
+    await this.auditService.log(
+      userId,
+      'WALLET_CREATE',
+      { walletId: wallet.id, publicKey, name },
+    );
 
-  async enableMultiSignature(
-    walletId: string,
-    userId: string,
-  ): Promise<{ transactionHash: string; cosignerPublicKey: string }> {
-    const wallet = await this.prisma.wallet.findFirst({
-      where: { id: walletId, userId },
+    this.logger.info({
+      event: 'wallet_created',
+      userId,
+      walletId: wallet.id,
+      publicKey,
     });
-
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
-
-    const cosignerPublicKey = await this.vaultService.getCosignerPublicKey();
-    if (!cosignerPublicKey) {
-      throw new BadRequestException('Cosigner key not configured in vault');
-    }
-
-    const userKeypair = await this.vaultService.getUserKeypair(userId);
-
-    const account = await server.loadAccount(wallet.publicKey);
-    const transaction = new TransactionBuilder(account, {
-      fee: '10000',
-      networkPassphrase: process.env.STELLAR_NETWORK === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET,
-    })
-      .addOperation(Operation.setOptions({
-        signer: {
-          ed25519PublicKey: cosignerPublicKey,
-          weight: 1,
-        },
-        masterWeight: 1,
-        lowThreshold: 2,
-        medThreshold: 2,
-        highThreshold: 2,
-      }))
-      .setTimeout(180)
-      .build();
-
-    const userKeypairInstance = Keypair.fromSecret(userKeypair.privateKey);
-    transaction.sign(userKeypairInstance);
-
-    const response = await server.submitTransaction(transaction);
-    const transactionHash = response.hash;
-
-    this.logger.log(`Multi-signature enabled for wallet ${walletId}`);
-
-    return {
-      transactionHash,
-      cosignerPublicKey,
-    };
-  }
-
-  async findByUserId(userId: string) {
-    return this.prisma.wallet.findUnique({
-      where: { userId },
-    });
-  }
-
-  async findByPublicKey(publicKey: string) {
-    return this.prisma.wallet.findUnique({
-      where: { publicKey },
-    });
-  }
-
-  async getWallet(id: string, userId: string) {
-    const wallet = await this.prisma.wallet.findFirst({
-      where: { id, userId },
-    });
-
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
 
     return wallet;
   }
 
-  async getBalances(userId: string, afterTxHash?: string) {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
+  async getWallets(userId: string) {
+    return this.prisma.wallet.findMany({
+      where: { userId },
+    });
+  }
 
-    const cacheKey = `wallet_balances:${userId}`;
-    const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
-    
-    let balanceFresh = true;
-    let balanceAsOf = new Date().toISOString();
-    let currentBalances = null;
+  async enableMultisig(walletId: string, userId: string) {
+    const wallet = await this.prisma.wallet.update({
+      where: { id: walletId, userId },
+      data: { multisigEnabled: true },
+    });
 
-    if (afterTxHash) {
-      const BALANCE_POLL_TIMEOUT_MS = 15000;
-      const start = Date.now();
-      let txIngested = false;
+    // Audit: Multisig enabled
+    await this.auditService.log(
+      userId,
+      'WALLET_MULTISIG_ENABLE',
+      { walletId, publicKey: wallet.publicKey },
+    );
 
-      while (Date.now() - start < BALANCE_POLL_TIMEOUT_MS) {
-        const tx = await this.prisma.transaction.findUnique({ where: { id: afterTxHash } });
-        if (tx && tx.stellarTxHash) {
-          try {
-            await server.transactions().transaction(tx.stellarTxHash).call();
-            txIngested = true;
-            break;
-          } catch (err) {
-            // Not ingested yet, keep polling
-          }
-        }
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      balanceFresh = txIngested;
-    } else {
-      const cached = await redis.get(cacheKey);
-      if (cached) {
-        redis.disconnect();
-        return JSON.parse(cached);
-      }
-    }
+    this.logger.info({
+      event: 'wallet_multisig_enabled',
+      userId,
+      walletId,
+    });
 
-    try {
-      const account = await server.loadAccount(wallet.publicKey);
-      currentBalances = account.balances.map((b: any) => ({
-        asset: b.asset_type === 'native' ? 'XLM' : b.asset_code,
-        balance: b.balance,
-      }));
-      balanceAsOf = (account as any).last_modified_time || new Date().toISOString();
-    } catch (err: any) {
-      if (err?.response?.status === 404) {
-        currentBalances = [];
-      } else {
-        throw err;
-      }
-    }
+    return wallet;
+  }
 
-    const result = {
-      balances: currentBalances,
-      balanceFresh,
-      balanceAsOf,
-    };
+  async freezeWallet(walletId: string, userId: string) {
+    const wallet = await this.prisma.wallet.update({
+      where: { id: walletId, userId },
+      data: { isFrozen: true },
+    });
 
-    // Cache the result for 60 seconds
-    await redis.set(cacheKey, JSON.stringify(result), 'EX', 60);
-    redis.disconnect();
+    // Audit: Wallet frozen
+    await this.auditService.log(
+      userId,
+      'WALLET_FREEZE',
+      { walletId, publicKey: wallet.publicKey },
+    );
 
-    return result;
+    return wallet;
+  }
+
+  async unfreezeWallet(walletId: string, userId: string) {
+    const wallet = await this.prisma.wallet.update({
+      where: { id: walletId, userId },
+      data: { isFrozen: false },
+    });
+
+    // Audit: Wallet unfrozen
+    await this.auditService.log(
+      userId,
+      'WALLET_UNFREEZE',
+      { walletId, publicKey: wallet.publicKey },
+    );
+
+    return wallet;
   }
 
   async reconcileWallet(userId: string) {

@@ -14,12 +14,6 @@ export interface GetHistoryOptions {
   limit?: number;
   /** Opaque cursor string — the `id` of the last transaction on the previous page. */
   cursor?: string;
-  /** Filter by transaction status (e.g. "PENDING", "SUCCESS", "FAILED", "RETRYING"). */
-  status?: string;
-  /** Filter by asset code (e.g. "USDC", "XLM", "NGN"). */
-  currency?: string;
-  /** Filter by date range: "7d" = last 7 days, "30d" = last 30 days. */
-  dateRange?: string;
 }
 
 export interface PaginatedHistory {
@@ -86,30 +80,13 @@ export class TransactionService {
     const limit = Math.max(1, rawLimit);
     const cursor = options.cursor;
 
-    // Build the `where` clause from optional filter parameters.
-    const where: Record<string, unknown> = { userId };
-
-    if (options.status) {
-      where['status'] = options.status;
-    }
-
-    if (options.currency) {
-      where['assetCode'] = options.currency;
-    }
-
-    if (options.dateRange) {
-      const now = new Date();
-      const days = options.dateRange === '7d' ? 7 : 30;
-      where['createdAt'] = { gte: new Date(now.getTime() - days * 24 * 60 * 60 * 1000) };
-    }
-
-    // Total count respects the active filters.
-    const total = await this.prisma.transaction.count({ where });
+    // Total count for the user — used for "X of N" UI labels.
+    const total = await this.prisma.transaction.count({ where: { userId } });
 
     // Fetch one extra record beyond the requested limit to determine whether a
     // next page exists without a separate query.
     const rows = await this.prisma.transaction.findMany({
-      where,
+      where: { userId },
       orderBy: { createdAt: 'desc' },
       take: limit + 1,
       ...(cursor
