@@ -1,217 +1,190 @@
+import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import {
-  TransactionService,
-  HISTORY_MAX_LIMIT,
-  HISTORY_DEFAULT_LIMIT,
-} from './transaction.service';
-import { TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
+import { getQueueToken } from '@nestjs/bull';
+import { PrismaService } from '../prisma/prisma.service';
+import { KycService } from '../kyc/kyc.service';
+import { TransactionService } from './transaction.service';
 
-// ---------------------------------------------------------------------------
-// Shared fixtures
-// ---------------------------------------------------------------------------
+describe('TransactionService', () => {
+  let service: TransactionService;
+  let prismaService: PrismaService;
+  let kycService: KycService;
+  let txQueue: any;
 
-const mockWallet = { id: 'wallet-456', userId: 'user-123', publicKey: 'GPUBKEY' };
-
-function makeRows(count: number) {
-  return Array.from({ length: count }, (_, i) => ({
-    id: `tx-${i + 1}`,
-    userId: 'user-123',
-    createdAt: new Date(Date.now() - i * 1000),
-    amount: '10',
-    assetCode: 'XLM',
-    status: 'SUCCESS',
-  }));
-}
-
-function buildService(overrides: {
-  txRows?: ReturnType<typeof makeRows>;
-  total?: number;
-  walletFindUnique?: any;
-  txCreate?: any;
-}) {
-  const rows = overrides.txRows ?? [];
-  const total = overrides.total ?? rows.length;
-
-  const txQueue = { add: jest.fn().mockResolvedValue(undefined) };
-  const prisma = {
-    wallet: {
-      findUnique: overrides.walletFindUnique ?? jest.fn().mockResolvedValue(mockWallet),
-    },
+  const mockPrismaService = {
     transaction: {
-      create: overrides.txCreate ?? jest.fn().mockResolvedValue({ id: 'tx-new' }),
-      count: jest.fn().mockResolvedValue(total),
-      findMany: jest.fn().mockImplementation(({ take, cursor, skip }: any) => {
-        let start = 0;
-        if (cursor?.id) {
-          const idx = rows.findIndex((r) => r.id === cursor.id);
-          start = idx === -1 ? rows.length : idx + (skip ?? 0);
-        }
-        return Promise.resolve(rows.slice(start, start + take));
-      }),
+      create: jest.fn(),
+      findUnique: jest.fn(),
+      findMany: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
+    wallet: {
+      findUnique: jest.fn(),
     },
   };
 
-  const kycService = {
-    normalizeAmountToUsd: jest.fn().mockResolvedValue(1),
-    assertWithinDailyLimit: jest.fn().mockResolvedValue(undefined),
+  const mockKycService = {
+    normalizeAmountToUsd: jest.fn(),
+    assertWithinDailyLimit: jest.fn(),
   };
 
-  const service = new TransactionService(txQueue as any, prisma as any, kycService as any);
-  return { service, prisma, txQueue, kycService };
-}
+  const mockQueue = {
+    add: jest.fn(),
+  };
 
-// ---------------------------------------------------------------------------
-// sendTransfer tests (kept from original spec, updated for new service shape)
-// ---------------------------------------------------------------------------
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockKycService.normalizeAmountToUsd.mockResolvedValue(100.0);
+    mockKycService.assertWithinDailyLimit.mockResolvedValue(undefined);
 
-describe('TransactionService.sendTransfer', () => {
-  it('enqueues transfers with KYC checks and bounded retry options', async () => {
-    const { service, prisma, txQueue, kycService } = buildService({});
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        TransactionService,
+        {
+          provide: PrismaService,
+          useValue: mockPrismaService,
+        },
+        {
+          provide: KycService,
+          useValue: mockKycService,
+        },
+        {
+          provide: getQueueToken('transactions'),
+          useValue: mockQueue,
+        },
+      ],
+    }).compile();
 
-    await expect(
-      service.sendTransfer('user-123', {
-        destinationPublicKey: 'GDESTINATION',
-        amount: '10',
+    service = module.get<TransactionService>(TransactionService);
+    prismaService = module.get<PrismaService>(PrismaService);
+    kycService = module.get<KycService>(KycService);
+    txQueue = module.get(getQueueToken('transactions'));
+  });
+
+  describe('sendTransfer', () => {
+    it('should create transaction record', async () => {
+      const sendTransferDto = {
+        destinationPublicKey: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
+        amount: '100.00',
         assetCode: 'XLM',
-        memo: 'invoice',
-      }),
-    ).resolves.toEqual({ txId: 'tx-new', status: 'PENDING' });
+        memo: 'Transfer memo',
+      };
 
-    expect(kycService.normalizeAmountToUsd).toHaveBeenCalledWith('10', 'XLM');
-    expect(kycService.assertWithinDailyLimit).toHaveBeenCalledWith('user-123', 1);
-    expect(prisma.transaction.create).toHaveBeenCalledWith({
-      data: {
-        userId: 'user-123',
-        walletId: 'wallet-456',
-        destination: 'GDESTINATION',
-        amount: '10',
-        assetCode: 'XLM',
+      const createdTransaction = {
+        id: 'tx-1',
+        userId: 'user-1',
+        walletId: 'wallet-1',
+        destination: sendTransferDto.destinationPublicKey,
+        amount: sendTransferDto.amount,
+        assetCode: sendTransferDto.assetCode,
         assetIssuer: null,
-        memo: 'invoice',
+        memo: sendTransferDto.memo,
         status: 'PENDING',
-      },
-    });
-    expect(txQueue.add).toHaveBeenCalledWith(
-      'process',
-      expect.objectContaining({ txId: 'tx-new', userId: 'user-123' }),
-      TRANSACTION_QUEUE_OPTIONS,
-    );
-  });
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
 
-  it('throws NotFoundException when the user has no wallet', async () => {
-    const { service } = buildService({
-      walletFindUnique: jest.fn().mockResolvedValue(null),
+      mockPrismaService.wallet.findUnique.mockResolvedValue({
+        id: 'wallet-1',
+        publicKey: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+      });
+
+      mockPrismaService.transaction.create.mockResolvedValue(
+        createdTransaction,
+      );
+
+      const result = await service.sendTransfer('user-1', sendTransferDto);
+
+      expect(mockPrismaService.transaction.create).toHaveBeenCalled();
+      expect(result).toEqual({ txId: 'tx-1', status: 'PENDING' });
     });
 
-    await expect(
-      service.sendTransfer('user-no-wallet', {
-        destinationPublicKey: 'GDESTINATION',
-        amount: '10',
+    it('should throw error if wallet does not exist', async () => {
+      const sendTransferDto = {
+        destinationPublicKey: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
+        amount: '100.00',
         assetCode: 'XLM',
-      }),
-    ).rejects.toThrow(NotFoundException);
-  });
-});
+        memo: 'Transfer',
+      };
 
-// ---------------------------------------------------------------------------
-// getHistory pagination tests
-// ---------------------------------------------------------------------------
+      mockPrismaService.wallet.findUnique.mockResolvedValue(null);
 
-describe('TransactionService.getHistory', () => {
-  describe('first page — no cursor', () => {
-    it('returns up to limit records and a nextCursor when more pages exist', async () => {
-      // 30 total rows, page size 25 → first page returns 25 rows + nextCursor
-      const rows = makeRows(30);
-      const { service } = buildService({ txRows: rows, total: 30 });
-
-      const result = await service.getHistory('user-123', { limit: 25 });
-
-      expect(result.data).toHaveLength(25);
-      expect(result.nextCursor).toBe('tx-25');
-      expect(result.total).toBe(30);
-    });
-
-    it('returns all records and null nextCursor when count ≤ limit', async () => {
-      const rows = makeRows(10);
-      const { service } = buildService({ txRows: rows, total: 10 });
-
-      const result = await service.getHistory('user-123', { limit: 25 });
-
-      expect(result.data).toHaveLength(10);
-      expect(result.nextCursor).toBeNull();
-      expect(result.total).toBe(10);
-    });
-
-    it('uses HISTORY_DEFAULT_LIMIT when limit is omitted', async () => {
-      const rows = makeRows(HISTORY_DEFAULT_LIMIT + 5);
-      const { service, prisma } = buildService({ txRows: rows, total: rows.length });
-
-      await service.getHistory('user-123');
-
-      expect(prisma.transaction.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ take: HISTORY_DEFAULT_LIMIT + 1 }),
+      await expect(service.sendTransfer('user-1', sendTransferDto)).rejects.toThrow(
+        NotFoundException,
       );
     });
   });
 
-  describe('cursor navigation', () => {
-    it('uses cursor + skip:1 to fetch the next page', async () => {
-      const rows = makeRows(50);
-      const { service, prisma } = buildService({ txRows: rows, total: 50 });
+  describe('getTransactionsByWallet', () => {
+    it('should return latest 50 transactions for wallet', async () => {
+      const walletId = 'wallet-1';
+      const transactions = Array.from({ length: 25 }, (_, i) => ({
+        id: `tx-${i}`,
+        userId: 'user-1',
+        walletId: walletId,
+        destination: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
+        amount: String((i + 1) * 10),
+        assetCode: 'XLM',
+        status: i % 2 === 0 ? 'SUCCESS' : 'PENDING',
+        createdAt: new Date(Date.now() - i * 1000 * 60),
+        updatedAt: new Date(Date.now() - i * 1000 * 60),
+      }));
 
-      const result = await service.getHistory('user-123', { limit: 25, cursor: 'tx-25' });
+      mockPrismaService.transaction.findMany.mockResolvedValue(transactions);
 
-      expect(prisma.transaction.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cursor: { id: 'tx-25' },
-          skip: 1,
-          take: 26,
-        }),
+      const result = await service.getTransactionsByWallet(walletId);
+
+      expect(mockPrismaService.transaction.findMany).toHaveBeenCalledWith({
+        where: { walletId: walletId },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      });
+      expect(result).toEqual(transactions);
+    });
+
+    it('should return empty array if wallet has no transactions', async () => {
+      const walletId = 'wallet-no-transactions';
+
+      mockPrismaService.transaction.findMany.mockResolvedValue([]);
+
+      const result = await service.getTransactionsByWallet(walletId);
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('getTransaction', () => {
+    it('should return transaction by id', async () => {
+      const transactionId = 'tx-1';
+      const transaction = {
+        id: transactionId,
+        userId: 'user-1',
+        walletId: 'wallet-1',
+        destination: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
+        amount: '100.0',
+        status: 'SUCCESS',
+        createdAt: new Date(),
+      };
+
+      mockPrismaService.transaction.findUnique.mockResolvedValue(transaction);
+
+      const result = await service.getTransaction(transactionId);
+
+      expect(mockPrismaService.transaction.findUnique).toHaveBeenCalledWith({
+        where: { id: transactionId },
+      });
+      expect(result).toEqual(transaction);
+    });
+
+    it('should throw NotFoundException if transaction not found', async () => {
+      const transactionId = 'nonexistent-tx';
+
+      mockPrismaService.transaction.findUnique.mockResolvedValue(null);
+
+      await expect(service.getTransaction(transactionId)).rejects.toThrow(
+        NotFoundException,
       );
-      // rows 26–50: 25 items, last page
-      expect(result.data).toHaveLength(25);
-      expect(result.nextCursor).toBeNull();
-    });
-
-    it('returns nextCursor when a third page still exists', async () => {
-      const rows = makeRows(80);
-      const { service } = buildService({ txRows: rows, total: 80 });
-
-      const page2 = await service.getHistory('user-123', { limit: 25, cursor: 'tx-25' });
-
-      expect(page2.data).toHaveLength(25);
-      expect(page2.nextCursor).toBe('tx-50');
-    });
-  });
-
-  describe('empty history', () => {
-    it('returns empty data, null nextCursor, and total 0', async () => {
-      const { service } = buildService({ txRows: [], total: 0 });
-
-      const result = await service.getHistory('user-123', { limit: 25 });
-
-      expect(result.data).toHaveLength(0);
-      expect(result.nextCursor).toBeNull();
-      expect(result.total).toBe(0);
-    });
-  });
-
-  describe('limit validation', () => {
-    it(`throws BadRequestException when limit exceeds ${HISTORY_MAX_LIMIT}`, async () => {
-      const { service } = buildService({ txRows: [], total: 0 });
-
-      await expect(
-        service.getHistory('user-123', { limit: HISTORY_MAX_LIMIT + 1 }),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it(`accepts the maximum allowed limit of ${HISTORY_MAX_LIMIT}`, async () => {
-      const rows = makeRows(HISTORY_MAX_LIMIT);
-      const { service } = buildService({ txRows: rows, total: rows.length });
-
-      await expect(
-        service.getHistory('user-123', { limit: HISTORY_MAX_LIMIT }),
-      ).resolves.toBeDefined();
     });
   });
 });

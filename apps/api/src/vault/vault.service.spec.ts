@@ -4,12 +4,14 @@ import * as crypto from 'crypto';
 import { VaultService } from './vault.service';
 
 function deriveUserKey(userId: string, masterKey: Buffer): Buffer {
-  return crypto.hkdfSync(
-    'sha256',
-    masterKey,
-    Buffer.alloc(16),
-    Buffer.from(userId, 'utf8'),
-    32,
+  return Buffer.from(
+    crypto.hkdfSync(
+      'sha256',
+      masterKey,
+      Buffer.alloc(16),
+      Buffer.from(userId, 'utf8'),
+      32,
+    )
   );
 }
 

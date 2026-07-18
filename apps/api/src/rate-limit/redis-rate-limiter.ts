@@ -74,9 +74,8 @@ export class RedisRateLimiter {
     )) as unknown as [string, string, string];
 
     const count = Number.parseInt(result[0], 10);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const remaining = Number.parseInt(result[1], 10);
     const resetAt = Number.parseInt(result[2], 10);
+    const remaining = limit - count;
 
     return {
       limit,

@@ -1,29 +1,27 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { AuditModule } from './audit/audit.module';
+import { AuthModule } from './auth/auth.module';
 import { WalletModule } from './wallet/wallet.module';
 import { TransactionModule } from './transaction/transaction.module';
-import { AnchorModule } from './anchor/anchor.module';
-import { AuthModule } from './auth/auth.module';
-import { RateLimitModule } from './rate-limit/rate-limit.module';
-import { KycModule } from './kyc/kyc.module';
-import { envValidationSchema } from './config/env.validation';
+import { LoggerModule } from 'nestjs-pino';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({
-      isGlobal: true,
-      validationSchema: envValidationSchema,
-      validationOptions: {
-        abortEarly: false,
-        allowUnknown: true,
+    LoggerModule.forRoot({
+      pinoHttp: {
+        transport: process.env.NODE_ENV !== 'production'
+          ? { target: 'pino-pretty' }
+          : undefined,
+        level: process.env.LOG_LEVEL || 'info',
+        customProps: () => ({
+          service: 'afropay-api',
+        }),
       },
     }),
+    AuditModule,
     AuthModule,
     WalletModule,
     TransactionModule,
-    AnchorModule,
-    RateLimitModule,
-    KycModule,
   ],
 })
 export class AppModule {}
