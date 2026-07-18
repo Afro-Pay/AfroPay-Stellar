@@ -1,3 +1,44 @@
+class MockRedis {
+  private static store = new Map<string, { count: number; expiresAt: number }>();
+  
+  constructor(url: string, options: any) {}
+
+  disconnect() {}
+
+  async eval(script: string, numKeys: number, key: string, limit: any, windowMs: any, nowMs: any) {
+    const limitVal = Number(limit);
+    const windowMsVal = Number(windowMs);
+    const nowMsVal = Number(nowMs);
+
+    const bucketReset = (Math.floor(nowMsVal / windowMsVal) + 1) * windowMsVal;
+
+    let entry = MockRedis.store.get(key);
+    if (!entry || entry.expiresAt <= nowMsVal) {
+      entry = { count: 0, expiresAt: bucketReset };
+    }
+
+    entry.count += 1;
+    MockRedis.store.set(key, entry);
+
+    const remaining = Math.max(0, limitVal - entry.count);
+    return [String(entry.count), String(remaining), String(bucketReset)];
+  }
+
+  async del(keys: string | string[]) {
+    const keysArr = Array.isArray(keys) ? keys : [keys];
+    for (const k of keysArr) {
+      MockRedis.store.delete(k);
+    }
+  }
+
+  async keys(pattern: string) {
+    const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+    return Array.from(MockRedis.store.keys()).filter(k => regex.test(k));
+  }
+}
+
+(globalThis as any).Ioredis = MockRedis;
+
 import { ExecutionContext, HttpException } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { RedisRateLimiter } from "./redis-rate-limiter";

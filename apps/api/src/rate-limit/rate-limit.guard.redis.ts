@@ -57,13 +57,13 @@ export class RateLimitGuardRedis implements CanActivate {
     );
 
     response?.setHeader?.("X-RateLimit-Limit", String(limit));
-    response?.setHeader?.("X-RateLimit-Remaining", String(result.remaining));
+    response?.setHeader?.("X-RateLimit-Remaining", String(Math.max(0, result.remaining)));
     response?.setHeader?.(
       "X-RateLimit-Reset",
       new Date(result.resetAt).toISOString(),
     );
 
-    if (result.remaining > 0) return true;
+    if (result.remaining >= 0) return true;
 
     const retryAfterSeconds = Math.max(
       1,

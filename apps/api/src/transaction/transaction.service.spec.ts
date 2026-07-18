@@ -1,11 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { getQueueToken } from '@nestjs/bull';
 import { PrismaService } from '../prisma/prisma.service';
+import { KycService } from '../kyc/kyc.service';
 import { TransactionService } from './transaction.service';
 
 describe('TransactionService', () => {
   let service: TransactionService;
   let prismaService: PrismaService;
+  let kycService: KycService;
+  let txQueue: any;
 
   const mockPrismaService = {
     transaction: {
@@ -20,8 +24,19 @@ describe('TransactionService', () => {
     },
   };
 
+  const mockKycService = {
+    normalizeAmountToUsd: jest.fn(),
+    assertWithinDailyLimit: jest.fn(),
+  };
+
+  const mockQueue = {
+    add: jest.fn(),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockKycService.normalizeAmountToUsd.mockResolvedValue(100.0);
+    mockKycService.assertWithinDailyLimit.mockResolvedValue(undefined);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -30,18 +45,27 @@ describe('TransactionService', () => {
           provide: PrismaService,
           useValue: mockPrismaService,
         },
+        {
+          provide: KycService,
+          useValue: mockKycService,
+        },
+        {
+          provide: getQueueToken('transactions'),
+          useValue: mockQueue,
+        },
       ],
     }).compile();
 
     service = module.get<TransactionService>(TransactionService);
     prismaService = module.get<PrismaService>(PrismaService);
+    kycService = module.get<KycService>(KycService);
+    txQueue = module.get(getQueueToken('transactions'));
   });
 
   describe('sendTransfer', () => {
     it('should create transaction record', async () => {
       const sendTransferDto = {
-        fromWalletId: 'wallet-1',
-        toAddress: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
+        destinationPublicKey: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
         amount: '100.00',
         assetCode: 'XLM',
         memo: 'Transfer memo',
@@ -49,7 +73,13 @@ describe('TransactionService', () => {
 
       const createdTransaction = {
         id: 'tx-1',
-        ...sendTransferDto,
+        userId: 'user-1',
+        walletId: 'wallet-1',
+        destination: sendTransferDto.destinationPublicKey,
+        amount: sendTransferDto.amount,
+        assetCode: sendTransferDto.assetCode,
+        assetIssuer: null,
+        memo: sendTransferDto.memo,
         status: 'PENDING',
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -64,16 +94,15 @@ describe('TransactionService', () => {
         createdTransaction,
       );
 
-      const result = await service.sendTransfer(sendTransferDto);
+      const result = await service.sendTransfer('user-1', sendTransferDto);
 
       expect(mockPrismaService.transaction.create).toHaveBeenCalled();
-      expect(result).toEqual(createdTransaction);
+      expect(result).toEqual({ txId: 'tx-1', status: 'PENDING' });
     });
 
     it('should throw error if wallet does not exist', async () => {
       const sendTransferDto = {
-        fromWalletId: 'nonexistent-wallet',
-        toAddress: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
+        destinationPublicKey: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
         amount: '100.00',
         assetCode: 'XLM',
         memo: 'Transfer',
@@ -81,20 +110,21 @@ describe('TransactionService', () => {
 
       mockPrismaService.wallet.findUnique.mockResolvedValue(null);
 
-      await expect(service.sendTransfer(sendTransferDto)).rejects.toThrow(
-        BadRequestException,
+      await expect(service.sendTransfer('user-1', sendTransferDto)).rejects.toThrow(
+        NotFoundException,
       );
     });
   });
 
-  describe('getTransactionHistory', () => {
+  describe('getTransactionsByWallet', () => {
     it('should return latest 50 transactions for wallet', async () => {
       const walletId = 'wallet-1';
       const transactions = Array.from({ length: 25 }, (_, i) => ({
         id: `tx-${i}`,
-        fromWalletId: walletId,
-        toAddress: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
-        amount: (i + 1) * 10,
+        userId: 'user-1',
+        walletId: walletId,
+        destination: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
+        amount: String((i + 1) * 10),
         assetCode: 'XLM',
         status: i % 2 === 0 ? 'SUCCESS' : 'PENDING',
         createdAt: new Date(Date.now() - i * 1000 * 60),
@@ -103,10 +133,10 @@ describe('TransactionService', () => {
 
       mockPrismaService.transaction.findMany.mockResolvedValue(transactions);
 
-      const result = await service.getTransactionHistory(walletId);
+      const result = await service.getTransactionsByWallet(walletId);
 
       expect(mockPrismaService.transaction.findMany).toHaveBeenCalledWith({
-        where: { fromWalletId: walletId },
+        where: { walletId: walletId },
         orderBy: { createdAt: 'desc' },
         take: 50,
       });
@@ -118,7 +148,7 @@ describe('TransactionService', () => {
 
       mockPrismaService.transaction.findMany.mockResolvedValue([]);
 
-      const result = await service.getTransactionHistory(walletId);
+      const result = await service.getTransactionsByWallet(walletId);
 
       expect(result).toEqual([]);
     });
@@ -129,9 +159,10 @@ describe('TransactionService', () => {
       const transactionId = 'tx-1';
       const transaction = {
         id: transactionId,
-        fromWalletId: 'wallet-1',
-        toAddress: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
-        amount: 100.0,
+        userId: 'user-1',
+        walletId: 'wallet-1',
+        destination: 'GYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
+        amount: '100.0',
         status: 'SUCCESS',
         createdAt: new Date(),
       };

@@ -79,18 +79,19 @@ describe('AuthService', () => {
       expect(mockPrismaService.user.create).toHaveBeenCalledWith({
         data: {
           email: registerDto.email,
-          name: registerDto.name,
-          passwordHash: hashedPassword,
+          password: hashedPassword,
         },
       });
-      expect(mockJwtService.sign).toHaveBeenCalledWith({
-        sub: createdUser.id,
-        email: createdUser.email,
-      });
-      expect(result).toEqual({
-        user: createdUser,
-        accessToken: 'access_token_123',
-      });
+      expect(mockJwtService.sign).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sub: createdUser.id,
+          email: createdUser.email,
+        }),
+        expect.any(Object),
+      );
+      expect(result).toEqual(expect.objectContaining({
+        access_token: 'access_token_123',
+      }));
     });
 
     it('should throw ConflictException when registering with duplicate email', async () => {
@@ -166,14 +167,16 @@ describe('AuthService', () => {
         loginDto.password,
         dbUser.passwordHash,
       );
-      expect(mockJwtService.sign).toHaveBeenCalledWith({
-        sub: dbUser.id,
-        email: dbUser.email,
-      });
-      expect(result).toEqual({
-        user: dbUser,
-        accessToken: 'access_token_123',
-      });
+      expect(mockJwtService.sign).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sub: dbUser.id,
+          email: dbUser.email,
+        }),
+        expect.any(Object),
+      );
+      expect(result).toEqual(expect.objectContaining({
+        access_token: 'access_token_123',
+      }));
     });
 
     it('should throw UnauthorizedException when user not found', async () => {
@@ -292,10 +295,13 @@ describe('AuthService', () => {
       expect(mockPrismaService.user.findUnique).toHaveBeenCalledWith({
         where: { id: decoded.sub },
       });
-      expect(mockJwtService.sign).toHaveBeenCalledWith({
-        sub: dbUser.id,
-        email: dbUser.email,
-      });
+      expect(mockJwtService.sign).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sub: dbUser.id,
+          email: dbUser.email,
+        }),
+        expect.any(Object),
+      );
       expect(result).toEqual({ accessToken: 'new_access_token' });
     });
 

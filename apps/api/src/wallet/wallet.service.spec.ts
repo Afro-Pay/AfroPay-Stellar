@@ -182,7 +182,7 @@ describe("WalletService getBalances polling", () => {
         findUnique: jest.fn().mockResolvedValue({ id: 'tx1', stellarTxHash: 'hash1' })
       }
     };
-    service = new WalletService(null as any, null as any, null as any, prisma);
+    service = new WalletService(prisma);
   });
 
   it("fresh balance", async () => {

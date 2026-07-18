@@ -10,7 +10,7 @@
  * The NestJS app, Prisma (real DB), Redis, and BullMQ are real.
  */
 
-import * as request from 'supertest';
+import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { createApp, uniqueEmail } from './helpers';
@@ -18,29 +18,57 @@ import { createApp, uniqueEmail } from './helpers';
 // ---------------------------------------------------------------------------
 // Stellar SDK mock
 // ---------------------------------------------------------------------------
-const mockLoadAccount = jest.fn();
-const mockSubmitTransaction = jest.fn();
+let mockLoadAccount: jest.Mock;
+let mockSubmitTransaction: jest.Mock;
 
 jest.mock('stellar-sdk', () => {
   const actual = jest.requireActual('stellar-sdk');
+  const innerMockLoadAccount = jest.fn();
+  const innerMockSubmitTransaction = jest.fn();
   return {
     ...actual,
     Horizon: {
       ...actual.Horizon,
       Server: jest.fn().mockImplementation(() => ({
-        loadAccount: mockLoadAccount,
-        submitTransaction: mockSubmitTransaction,
+        loadAccount: innerMockLoadAccount,
+        submitTransaction: innerMockSubmitTransaction,
       })),
     },
+    _mockLoadAccount: innerMockLoadAccount,
+    _mockSubmitTransaction: innerMockSubmitTransaction,
   };
 });
+
+const { _mockLoadAccount, _mockSubmitTransaction } = require('stellar-sdk') as any;
+mockLoadAccount = _mockLoadAccount;
+mockSubmitTransaction = _mockSubmitTransaction;
 
 // ---------------------------------------------------------------------------
 // axios mock — prevents real HTTP calls to testanchor.stellar.org
 // ---------------------------------------------------------------------------
-jest.mock('axios');
+jest.mock('axios', () => {
+  const mockAxiosInstance = {
+    interceptors: {
+      request: { use: jest.fn(), eject: jest.fn() },
+      response: { use: jest.fn(), eject: jest.fn() },
+    },
+    get: jest.fn(),
+    post: jest.fn(),
+  };
+  return {
+    __esModule: true,
+    default: {
+      create: jest.fn().mockReturnValue(mockAxiosInstance),
+      get: jest.fn(),
+      post: jest.fn(),
+    },
+    create: jest.fn().mockReturnValue(mockAxiosInstance),
+    get: jest.fn(),
+    post: jest.fn(),
+  };
+});
 import axios from 'axios';
-const mockedAxios = axios as jest.Mocked<typeof axios>;
+const mockedAxios = axios as any;
 
 const USDC_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 

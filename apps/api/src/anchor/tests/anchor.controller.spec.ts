@@ -55,7 +55,7 @@ describe('AnchorController', () => {
     });
 
     it('should throw 403 if user has no wallet', async () => {
-      jest.spyOn(walletService, 'findByUserId').mockResolvedValue(null);
+      jest.spyOn(walletService, 'findByUserId').mockResolvedValue(null as any);
 
       await expect(
         controller['validateAccountOwnership'](mockUserId, mockUserWallet),

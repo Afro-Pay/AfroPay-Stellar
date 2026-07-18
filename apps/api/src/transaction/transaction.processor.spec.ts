@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { WalletService } from '../wallet/wallet.service';
 import { TransactionProcessor } from './transaction.processor';
 
 describe('TransactionProcessor', () => {
@@ -26,6 +27,12 @@ describe('TransactionProcessor', () => {
         {
           provide: PrismaService,
           useValue: mockPrismaService,
+        },
+        {
+          provide: WalletService,
+          useValue: {
+            getKeypair: jest.fn(),
+          },
         },
         {
           provide: Logger,
