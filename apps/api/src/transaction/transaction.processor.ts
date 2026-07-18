@@ -1,62 +1,130 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { QueueService } from '../queue/queue.service';
-import { ExchangeService } from '../exchange/exchange.service';
+import { Injectable } from '@nestjs/common';
+import { PrismaClient } from '@prisma/client';
+import { AuditService } from '../audit/audit.service';
+import { Logger } from 'nestjs-pino';
 
 @Injectable()
 export class TransactionProcessor {
-  private readonly logger = new Logger(TransactionProcessor.name);
-  private readonly thresholdUsd: number;
-
   constructor(
-    private configService: ConfigService,
-    private queueService: QueueService,
-    private exchangeService: ExchangeService,
+    private prisma: PrismaClient,
+    private auditService: AuditService,
+    private logger: Logger,
+  ) {}
+
+  async sendTransaction(
+    userId: string,
+    walletId: string,
+    fromAddress: string,
+    toAddress: string,
+    amount: string,
+    assetCode: string,
+    memo?: string,
   ) {
-    this.thresholdUsd = this.configService.get<number>('MULTISIG_THRESHOLD_USD', 10000);
-  }
+    // Create transaction record
+    const transaction = await this.prisma.transaction.create({
+      data: {
+        walletId,
+        fromAddress,
+        toAddress,
+        amount,
+        assetCode,
+        type: 'send',
+        status: 'pending',
+        memo,
+      },
+    });
 
-  async processTransaction(transactionData: any): Promise<void> {
-    // Get amount in USD for threshold check
-    const amountUsd = await this.convertToUsd(
-      transactionData.amount,
-      transactionData.asset_code,
+    // Audit: Transaction initiated
+    await this.auditService.log(
+      userId,
+      'TRANSACTION_INITIATE',
+      {
+        transactionId: transaction.id,
+        fromAddress,
+        toAddress,
+        amount,
+        assetCode,
+      },
     );
 
-    const requiresCosign = this.requiresCosign(amountUsd);
+    this.logger.info({
+      event: 'transaction_initiated',
+      userId,
+      transactionId: transaction.id,
+      fromAddress,
+      toAddress,
+      amount,
+      assetCode,
+    });
 
-    // Create job with requires_cosign flag
-    const job = {
-      ...transactionData,
-      requiresCosign,
-      thresholdUsd: this.thresholdUsd,
-    };
+    try {
+      // Process the transaction (simplified)
+      const result = await this.processOnChain(transaction);
 
-    // Send to queue
-    await this.queueService.sendJob(job);
+      // Update transaction status
+      const updated = await this.prisma.transaction.update({
+        where: { id: transaction.id },
+        data: {
+          status: 'completed',
+          txHash: result.hash,
+        },
+      });
 
-    this.logger.log(
-      `Transaction ${transactionData.id} requires cosign: ${requiresCosign}`,
-    );
-
-    // Log if above threshold
-    if (requiresCosign) {
-      this.logger.warn(
-        `High-value transaction ${transactionData.id}: $${amountUsd} USD exceeds threshold $${this.thresholdUsd}. Multi-signature required.`,
+      // Audit: Transaction completed
+      await this.auditService.log(
+        userId,
+        'TRANSACTION_COMPLETE',
+        {
+          transactionId: transaction.id,
+          txHash: result.hash,
+          fromAddress,
+          toAddress,
+          amount,
+        },
       );
+
+      this.logger.info({
+        event: 'transaction_completed',
+        userId,
+        transactionId: transaction.id,
+        txHash: result.hash,
+      });
+
+      return updated;
+    } catch (error) {
+      // Update transaction as failed
+      await this.prisma.transaction.update({
+        where: { id: transaction.id },
+        data: { status: 'failed' },
+      });
+
+      // Audit: Transaction failed
+      await this.auditService.log(
+        userId,
+        'TRANSACTION_FAILED',
+        {
+          transactionId: transaction.id,
+          fromAddress,
+          toAddress,
+          amount,
+          error: error.message,
+        },
+      );
+
+      this.logger.error({
+        event: 'transaction_failed',
+        userId,
+        transactionId: transaction.id,
+        error: error.message,
+      });
+
+      throw error;
     }
   }
 
-  private async convertToUsd(
-    amount: string,
-    assetCode: string,
-  ): Promise<number> {
-    // Convert amount to USD using exchange service
-    const rate = await this.exchangeService.getRate(assetCode, 'USD');
-    return parseFloat(amount) * rate;
-  }
-
-  private requiresCosign(amountUsd: number): boolean {
-    return amountUsd > this.thresholdUsd;
+  private async processOnChain(transaction: any): Promise<{ hash: string }> {
+    // Simulate on-chain processing
+    // In production, this would interact with Stellar/Soroban
+    return { hash: '0x' + Math.random().toString(16).substring(2) };
   }
 }
