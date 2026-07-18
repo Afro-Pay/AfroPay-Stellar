@@ -10,11 +10,9 @@ import SkeletonCard from '../components/SkeletonCard';
 
 export default function Dashboard() {
   const router = useRouter();
-  const queryClient = useQueryClient();
-  const { setPublicKey, balancesError, transactionsError, isLoadingBalances, setBalancesLoading, setBalancesError, setTransactionsError, clearError } = useWalletStore();
-  const { data: balances = [], isLoading: balancesLoading, error: balancesQueryError } = useBalances();
-  const { data: txPage, isLoading: txLoading, error: transactionsQueryError } = useTransactions();
-  const transactions = txPage?.data ?? [];
+  const { publicKey, setPublicKey } = useWalletStore();
+  const { data: balances = [], isLoading, error } = useBalances();
+  const { data: transactions = [] } = useTransactions();
 
   useEffect(() => {
     const token = localStorage.getItem("token");

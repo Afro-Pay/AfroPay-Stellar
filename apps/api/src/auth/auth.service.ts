@@ -1,119 +1,80 @@
 import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaClient } from '@prisma/client';
+import { AuditService } from '../audit/audit.service';
+import { Logger } from 'nestjs-pino';
 import * as bcrypt from 'bcrypt';
-
-interface RefreshTokenPayload {
-  sub: string;
-  email: string;
-  type?: string;
-}
 
 @Injectable()
 export class AuthService {
-  constructor(private prisma: PrismaService, private jwt: JwtService) {}
+  constructor(
+    private jwtService: JwtService,
+    private prisma: PrismaClient,
+    private auditService: AuditService,
+    private logger: Logger,
+  ) {}
 
-  async register(emailOrDto: string | any, password?: string) {
-    let email = '';
-    let pass = '';
-    if (typeof emailOrDto === 'object' && emailOrDto !== null) {
-      email = emailOrDto.email;
-      pass = emailOrDto.password;
-    } else {
-      email = emailOrDto;
-      pass = password;
-    }
+  async register(email: string, password: string, name?: string, ipAddress?: string, userAgent?: string) {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    const user = await this.prisma.user.create({
+      data: {
+        email,
+        password: hashedPassword,
+        name,
+      },
+    });
 
-    const existing = await this.prisma.user.findUnique({ where: { email } });
-    if (existing) {
-      throw new ConflictException('Email already registered');
-    }
+    // Audit: Registration
+    await this.auditService.log(
+      user.id,
+      'REGISTER',
+      { email: user.email, name: user.name },
+      ipAddress,
+      userAgent,
+    );
 
-    const hash = await bcrypt.hash(pass, 10);
-    const user = await this.prisma.user.create({ data: { email, password: hash } });
-    return this.signToken(user.id, user.email);
+    this.logger.info({
+      event: 'user_registered',
+      userId: user.id,
+      email: user.email,
+    });
+
+    return user;
   }
 
-  async login(emailOrDto: string | any, password?: string) {
-    let email = '';
-    let pass = '';
-    if (typeof emailOrDto === 'object' && emailOrDto !== null) {
-      email = emailOrDto.email;
-      pass = emailOrDto.password;
-    } else {
-      email = emailOrDto;
-      pass = password;
-    }
-    const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user) throw new UnauthorizedException('Invalid credentials');
-    
-    let isMatch = false;
-    try {
-      isMatch = await bcrypt.compare(pass, user.password ?? (user as any).passwordHash);
-    } catch {
+  async login(email: string, password: string, ipAddress?: string, userAgent?: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      this.logger.warn({
+        event: 'login_failed',
+        email,
+        ipAddress,
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
-    
-    if (!isMatch) throw new UnauthorizedException('Invalid credentials');
-    return this.signToken(user.id, user.email);
-  }
 
-  validateToken(token: string) {
-    return this.jwt.verify(token);
-  }
+    const payload = { sub: user.id, email: user.email, role: user.role };
+    const accessToken = this.jwtService.sign(payload);
 
-  async refreshToken(oldToken: string) {
-    const decoded = this.jwt.verify<RefreshTokenPayload>(oldToken);
-    const user = await this.prisma.user.findUnique({ where: { id: decoded.sub } });
-    if (!user) {
-      throw new UnauthorizedException('User not found');
-    }
-    const tokens = this.signToken(user.id, user.email);
-    return { accessToken: tokens.access_token };
-  }
+    // Audit: Login
+    await this.auditService.log(
+      user.id,
+      'LOGIN',
+      { email: user.email },
+      ipAddress,
+      userAgent,
+    );
 
-  async logout() {
-    return { success: true };
-  }
+    this.logger.info({
+      event: 'user_logged_in',
+      userId: user.id,
+      email: user.email,
+    });
 
-  async refreshSession(refreshToken: string) {
-    try {
-      const payload = await this.jwt.verifyAsync<RefreshTokenPayload>(refreshToken, {
-        secret: this.refreshSecret(),
-      });
-      if (payload.type !== 'refresh') {
-        throw new UnauthorizedException('Invalid refresh token');
-      }
-
-      return this.signToken(payload.sub, payload.email);
-    } catch {
-      throw new UnauthorizedException({
-        code: 'INVALID_REFRESH_TOKEN',
-        message: 'Refresh token is invalid or expired. Please sign in again.',
-      });
-    }
-  }
-
-  private signToken(userId: string, email: string) {
-    const accessExpiresIn = process.env.JWT_ACCESS_EXPIRES_IN ?? '15m';
-    return {
-      access_token: this.jwt.sign(
-        { sub: userId, email, type: 'access' },
-        { expiresIn: accessExpiresIn },
-      ),
-      refresh_token: this.jwt.sign(
-        { sub: userId, email, type: 'refresh' },
-        {
-          expiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '7d',
-          secret: this.refreshSecret(),
-        },
-      ),
-      token_type: 'Bearer',
-      expires_in: accessExpiresIn,
-    };
-  }
-
-  private refreshSecret() {
-    return process.env.JWT_REFRESH_SECRET ?? process.env.JWT_SECRET;
+    return { accessToken, user: { id: user.id, email: user.email, role: user.role } };
   }
 }

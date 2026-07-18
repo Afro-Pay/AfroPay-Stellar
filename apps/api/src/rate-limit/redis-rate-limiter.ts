@@ -47,24 +47,11 @@ export class RedisRateLimiter {
     this.redis = new Redis(redisUrl, {
       maxRetriesPerRequest: 1,
       enableReadyCheck: true,
-      // Set to 0 so disconnect() destroys the socket in the next tick rather
-      // than after the default 2000 ms wait. This prevents Jest from detecting
-      // an open Timeout handle when tests run without a live Redis instance.
-      disconnectTimeout: 0,
     });
   }
 
   async close(): Promise<void> {
-    // Use disconnect() rather than quit() to force-close the socket immediately.
-    // quit() sends a QUIT command and awaits a reply, but when Redis is
-    // unavailable (e.g. in unit-test environments) ioredis schedules a
-    // reconnect Timeout before giving up — leaving an open handle that prevents
-    // Jest from exiting cleanly.
-    try {
-      this.redis.disconnect();
-    } catch {
-      // Ignore errors during forced disconnect (e.g. already closed).
-    }
+    await this.redis.quit().catch(() => undefined);
   }
 
   private key(realKey: string): string {
