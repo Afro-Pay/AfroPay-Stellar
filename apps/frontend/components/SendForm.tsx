@@ -7,7 +7,7 @@ const ASSETS = ["XLM", "USDC", "NGN"];
 
 export default function SendForm() {
   const queryClient = useQueryClient();
-  const { sendTransfer, simulateTransfer } = useWalletStore();
+  const { sendTransfer, simulateTransfer, sendError, isLoadingSend, clearError } = useWalletStore();
   const [form, setForm] = useState({
     destinationPublicKey: "",
     amount: "",
@@ -17,25 +17,25 @@ export default function SendForm() {
 
   const [step, setStep] = useState<'edit' | 'preview'>('edit');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
   const [simulation, setSimulation] = useState<SimulationResult | null>(null);
   const [countdown, setCountdown] = useState<number>(0);
   const [lastSimulationTime, setLastSimulationTime] = useState<number>(0);
-  const [status, setStatus] = useState("");
 
   const previewHeaderRef = useRef<HTMLHeadingElement>(null);
   const amountInputRef = useRef<HTMLInputElement>(null);
 
   const handleSimulate = async (isAutoRefresh = false) => {
     if (!form.destinationPublicKey || !form.amount) {
-      setError("Please enter a destination public key and amount.");
+      setFormError("Please enter a destination public key and amount.");
       return;
     }
 
     if (!isAutoRefresh) {
       setLoading(true);
     }
-    setError(null);
+    setFormError(null);
+    clearError('send');
 
     try {
       const result = await simulateTransfer({
@@ -58,7 +58,7 @@ export default function SendForm() {
             errMsg = primaryIssue.message || errMsg;
           }
         }
-        setError(errMsg);
+        setFormError(errMsg);
         if (step === 'edit') {
           setSimulation(null);
         } else {
@@ -76,7 +76,7 @@ export default function SendForm() {
         setStep('preview');
       }
     } catch (err: any) {
-      setError(err?.response?.data?.message || "Simulation failed. Please try again.");
+      setFormError(err?.response?.data?.message || "Simulation failed. Please try again.");
       if (step === 'edit') {
         setSimulation(null);
       } else {
@@ -115,7 +115,8 @@ export default function SendForm() {
   const handleBackToEdit = () => {
     setStep('edit');
     setSimulation(null);
-    setError(null);
+    setFormError(null);
+    clearError('send');
     setTimeout(() => {
       amountInputRef.current?.focus();
     }, 50);
@@ -131,10 +132,11 @@ export default function SendForm() {
   };
 
   const handleConfirm = async () => {
-    setStatus("Sending...");
+    setFormError(null);
+    clearError('send');
+
     try {
       await sendTransfer(form);
-      setStatus("Transaction submitted!");
       setStep('edit');
       setSimulation(null);
       setForm({
@@ -146,7 +148,7 @@ export default function SendForm() {
       queryClient.invalidateQueries({ queryKey: ['balances'] });
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
     } catch {
-      setStatus("Failed to send. Please try again.");
+      // The store captures the send error; no local status string is needed.
     }
   };
 
@@ -169,10 +171,10 @@ export default function SendForm() {
 
   return (
     <form onSubmit={handleSubmit} className="bg-gray-900 rounded-xl p-5 space-y-4 border border-gray-800 shadow-xl" aria-describedby="send-form-status">
-      {error && (
+      {(formError || sendError) && (
         <div role="alert" className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm rounded-lg p-3.5 space-y-1 animate-fade-in">
-          <p className="font-semibold">Unable to proceed</p>
-          <p className="text-xs text-red-300/80">{error}</p>
+          <p className="font-semibold">{sendError ? 'Unable to submit transfer' : 'Unable to proceed'}</p>
+          <p className="text-xs text-red-300/80">{sendError ?? formError}</p>
         </div>
       )}
 
@@ -188,7 +190,13 @@ export default function SendForm() {
         </div>
       )}
 
-      {!loading && step === 'edit' && (
+      {!loading && isLoadingSend && (
+        <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/10 p-3 text-sm text-indigo-300" aria-live="polite">
+          Submitting transfer...
+        </div>
+      )}
+
+      {!loading && !isLoadingSend && step === 'edit' && (
         <div className="space-y-3">
           <div>
             <label htmlFor="destination-public-key" className="block text-xs font-medium text-gray-300 mb-1">
@@ -261,7 +269,7 @@ export default function SendForm() {
         </div>
       )}
 
-      {!loading && step === 'preview' && simulation && (
+      {!loading && !isLoadingSend && step === 'preview' && simulation && (
         <div className="space-y-4">
           <div className="border-b border-gray-800 pb-3 flex justify-between items-center">
             <h2
@@ -348,9 +356,9 @@ export default function SendForm() {
         </div>
       )}
 
-      {status && (
+      {!loading && !isLoadingSend && (
         <p id="send-form-status" className="text-xs text-center text-gray-400 pt-1" role="status" aria-live="polite">
-          {status}
+          Review the quote and confirm when ready.
         </p>
       )}
     </form>
