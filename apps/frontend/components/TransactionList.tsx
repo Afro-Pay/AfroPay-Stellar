@@ -10,7 +10,29 @@ const STATUS_COLORS: Record<string, string> = {
   RETRYING: 'text-orange-400',
 };
 
-export default function TransactionList({ transactions }: { transactions: Transaction[] }) {
+function SkeletonRow() {
+  return (
+    <li className="bg-gray-900 rounded-xl p-4 flex justify-between items-center animate-pulse">
+      <div className="flex-1 space-y-2">
+        <p className="text-sm font-medium h-4 bg-gray-700 rounded">&nbsp;</p>
+        <p className="text-xs text-gray-400 h-3 bg-gray-700 rounded w-24">&nbsp;</p>
+      </div>
+      <span className="text-xs font-semibold h-4 bg-gray-700 rounded w-16">&nbsp;</span>
+    </li>
+  );
+}
+
+export default function TransactionList({ transactions, isLoading }: { transactions: Transaction[]; isLoading?: boolean }) {
+  if (isLoading) {
+    return (
+      <ul className="space-y-2">
+        <SkeletonRow />
+        <SkeletonRow />
+        <SkeletonRow />
+      </ul>
+    );
+  }
+
   if (!transactions.length) return <p className="text-gray-500 text-sm">No transactions yet.</p>;
 
   return (

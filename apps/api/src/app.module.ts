@@ -1,19 +1,27 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { AuditModule } from './audit/audit.module';
+import { AuthModule } from './auth/auth.module';
 import { WalletModule } from './wallet/wallet.module';
 import { TransactionModule } from './transaction/transaction.module';
-import { AnchorModule } from './anchor/anchor.module';
-import { AuthModule } from './auth/auth.module';
-import { AuditModule } from './audit/audit.module';
+import { LoggerModule } from 'nestjs-pino';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    LoggerModule.forRoot({
+      pinoHttp: {
+        transport: process.env.NODE_ENV !== 'production'
+          ? { target: 'pino-pretty' }
+          : undefined,
+        level: process.env.LOG_LEVEL || 'info',
+        customProps: () => ({
+          service: 'afropay-api',
+        }),
+      },
+    }),
+    AuditModule,
     AuthModule,
     WalletModule,
     TransactionModule,
-    AnchorModule,
-    AuditModule,
   ],
 })
 export class AppModule {}

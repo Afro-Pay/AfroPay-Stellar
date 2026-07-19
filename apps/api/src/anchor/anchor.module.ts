@@ -1,9 +1,12 @@
 import { Module } from '@nestjs/common';
-import { AnchorService } from './anchor.service';
 import { AnchorController } from './anchor.controller';
+import { AnchorService } from './anchor.service';
+import { WalletModule } from '../wallet/wallet.module';
 
 @Module({
-  providers: [AnchorService],
+  imports: [WalletModule],
   controllers: [AnchorController],
+  providers: [AnchorService],
+  exports: [AnchorService],
 })
 export class AnchorModule {}
