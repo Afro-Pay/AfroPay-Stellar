@@ -54,6 +54,16 @@ export default function Dashboard() {
     void queryClient.invalidateQueries({ queryKey: ['transactions'] });
   };
 
+  // Re-fetch balances and transactions once the wallet becomes available
+  // (e.g., after the user creates a wallet via WalletSetup).
+  useEffect(() => {
+    if (publicKey) {
+      fetchBalances();
+      fetchTransactions();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publicKey]);
+
   return (
     <main className="p-4 max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold mb-6 text-gray-900 dark:text-white">
@@ -95,6 +105,9 @@ export default function Dashboard() {
         )}
       </section>
 
+      {/* ------------------------------------------------------------------ */}
+      {/* Send Money — always rendered; SendForm handles the disabled state.  */}
+      {/* ------------------------------------------------------------------ */}
       <section className="mb-6">
         <h2 className="text-lg font-semibold mb-2 text-gray-900 dark:text-white">
           Send Money
@@ -102,6 +115,9 @@ export default function Dashboard() {
         <SendForm />
       </section>
 
+      {/* ------------------------------------------------------------------ */}
+      {/* Transaction History                                                  */}
+      {/* ------------------------------------------------------------------ */}
       <section>
         <h2 className="text-lg font-semibold mb-2">Transaction History</h2>
         <TransactionList transactions={transactions} isLoading={txLoading} />
