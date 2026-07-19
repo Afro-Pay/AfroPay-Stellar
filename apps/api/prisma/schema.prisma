@@ -110,3 +110,37 @@ model KycRecord {
   @@index([userId])
   @@index([status])
 }
+
+/// Structured audit log entry capturing security-relevant events.
+/// Each row is immutable by convention — never UPDATE or DELETE audit rows.
+model AuditLog {
+  id            String   @id @default(uuid())
+  /// The authenticated user who triggered the event (nullable for system events).
+  userId        String?
+  /// High-level event category: WALLET | TRANSACTION | AUTH
+  category      String
+  /// Specific operation: WALLET_CREATED | WALLET_EXPORTED | WALLET_IMPORTED |
+  ///   TX_SUBMITTED | TX_SUCCESS | TX_FAILED | TX_RETRYING
+  operation     String
+  /// Outcome of the operation: SUCCESS | FAILURE
+  outcome       String
+  /// Stellar public key involved, when applicable.
+  walletPublicKey String?
+  /// Transaction amount, when applicable.
+  amount        String?
+  /// Asset code (XLM, USDC, …), when applicable.
+  assetCode     String?
+  /// Destination Stellar address, when applicable.
+  destination   String?
+  /// Stellar transaction hash, when applicable.
+  txHash        String?
+  /// Additional freeform context serialised as JSON.
+  metadata      Json?
+  /// ISO-8601 timestamp — indexed for time-range queries during reviews.
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+  @@index([category])
+  @@index([operation])
+  @@index([createdAt])
+}

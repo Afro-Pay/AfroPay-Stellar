@@ -61,6 +61,18 @@ export class TransactionService {
 
     await this.txQueue.add('process', { txId: tx.id, userId, ...dto }, TRANSACTION_QUEUE_OPTIONS);
 
+    // Audit: transaction enqueued
+    await this.auditLog.log({
+      userId,
+      category: AuditCategory.TRANSACTION,
+      operation: AuditOperation.TX_SUBMITTED,
+      outcome: AuditOutcome.SUCCESS,
+      amount: dto.amount,
+      assetCode: dto.assetCode,
+      destination: dto.destinationPublicKey,
+      metadata: { txId: tx.id, memo: dto.memo ?? null },
+    });
+
     return { txId: tx.id, status: 'PENDING' };
   }
 
