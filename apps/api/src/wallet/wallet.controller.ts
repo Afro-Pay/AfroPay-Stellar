@@ -22,6 +22,17 @@ export class WalletController {
     return this.wallet.getBalances(req.user.userId);
   }
 
+  /**
+   * GET /wallet/public-key
+   * Returns only the public key — safe for Dashboard polling on mount.
+   * Returns 404 when no wallet exists (used by the frontend to decide
+   * whether to show the WalletSetup onboarding prompt).
+   */
+  @Get('public-key')
+  publicKey(@Request() req: any) {
+    return this.wallet.getPublicKey(req.user.userId);
+  }
+
   @Get('export')
   export(@Request() req: any) {
     return this.wallet.exportWallet(req.user.userId);
