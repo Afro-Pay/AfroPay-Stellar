@@ -1,0 +1,1 @@
+/usr/lib/postgresql/16/bin/postgres "-D" "/home/femi-john/Documents/Grant/AfroPay-Stellar/apps/api/pgdata_test" "-p" "5433" "-c" "unix_socket_directories=/home/femi-john/Documents/Grant/AfroPay-Stellar/apps/api/pgdata_test"

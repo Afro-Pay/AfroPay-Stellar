@@ -1,77 +1,81 @@
 import { create } from 'zustand';
-import api from '../lib/api';
+import api, { SimulationResult } from '../lib/api';
 
-interface Balance {
-  asset: string;
-  balance: string;
-}
-
-interface Transaction {
-  id: string;
-  destination: string;
-  amount: string;
-  assetCode: string;
-  status: string;
-  createdAt: string;
-}
+type WalletAction = 'balances' | 'transactions' | 'send';
 
 interface WalletStore {
-  balances: Balance[];
-  transactions: Transaction[];
-  /** Stellar public key for the authenticated user, or null if no wallet yet. */
   publicKey: string | null;
-  /** True while any async wallet operation is in flight. */
-  loading: boolean;
-  /** Last error message from a wallet operation, or null. */
-  error: string | null;
+  balancesError: string | null;
+  transactionsError: string | null;
+  sendError: string | null;
+  isLoadingBalances: boolean;
+  isLoadingSend: boolean;
 
-  fetchBalances: () => Promise<void>;
-  fetchTransactions: () => Promise<void>;
+  setPublicKey: (key: string | null) => void;
+  setBalancesError: (error: string | null) => void;
+  setTransactionsError: (error: string | null) => void;
+  setSendError: (error: string | null) => void;
+  clearError: (action: WalletAction) => void;
+  setBalancesLoading: (isLoading: boolean) => void;
+  setSendLoading: (isLoading: boolean) => void;
   sendTransfer: (data: {
+    destinationPublicKey: string; amount: string;
+    assetCode: string; assetIssuer?: string; memo?: string;
+  }) => Promise<{ txId?: string }>;
+  simulateTransfer: (data: {
     destinationPublicKey: string;
     amount: string;
     assetCode: string;
     assetIssuer?: string;
-    memo?: string;
-  }) => Promise<void>;
-
-  /**
-   * Call POST /wallet/create to generate a new Stellar keypair on the
-   * backend and persist the public key in store state.
-   */
-  createWallet: () => Promise<void>;
-
-  /**
-   * Retrieve only the public key for the current user from GET /wallet/public-key.
-   * Returns 404 when no wallet exists — the store sets publicKey to null in
-   * that case so the WalletSetup onboarding prompt is shown automatically.
-   * Intended to be called once on Dashboard mount.
-   */
-  fetchPublicKey: () => Promise<void>;
-
-  /** Clear any stored error message. */
-  clearError: () => void;
+  }) => Promise<SimulationResult>;
 }
 
 export const useWalletStore = create<WalletStore>((set) => ({
-  balances: [],
-  transactions: [],
   publicKey: null,
-  loading: false,
-  error: null,
+  balancesError: null,
+  transactionsError: null,
+  sendError: null,
+  isLoadingBalances: false,
+  isLoadingSend: false,
 
-  fetchBalances: async () => {
-    const { data } = await api.get('/wallet/balances');
-    set({ balances: data });
-  },
+  setPublicKey: (key) => set({ publicKey: key }),
+  setBalancesError: (error) => set({ balancesError: error }),
+  setTransactionsError: (error) => set({ transactionsError: error }),
+  setSendError: (error) => set({ sendError: error }),
+  clearError: (action) => {
+    if (action === 'balances') {
+      set({ balancesError: null });
+      return;
+    }
 
-  fetchTransactions: async () => {
-    const { data } = await api.get('/transactions/history');
-    set({ transactions: data });
+    if (action === 'transactions') {
+      set({ transactionsError: null });
+      return;
+    }
+
+    set({ sendError: null });
   },
+  setBalancesLoading: (isLoading) => set({ isLoadingBalances: isLoading }),
+  setSendLoading: (isLoading) => set({ isLoadingSend: isLoading }),
 
   sendTransfer: async (payload) => {
-    await api.post('/transactions/send', payload);
+    set({ isLoadingSend: true, sendError: null });
+
+    try {
+      const { data } = await api.post('/transactions/send', payload);
+      return { txId: data?.txId };
+    } catch (error: any) {
+      const message = error?.response?.data?.message || 'Transfer failed. Please try again.';
+      set({ sendError: message });
+      throw error;
+    } finally {
+      set({ isLoadingSend: false });
+    }
+  },
+
+  simulateTransfer: async (payload) => {
+    const { data } = await api.post('/transactions/simulate', payload);
+    return data;
   },
 
   createWallet: async () => {

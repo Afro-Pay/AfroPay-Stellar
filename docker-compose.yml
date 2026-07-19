@@ -1,60 +1,147 @@
-version: '3.9'
+version: "3.9"
+
+# =============================================================================
+# AfroPay-Stellar — Docker Compose (Local Development)
+# =============================================================================
+# ⚠ SECURITY NOTES ⚠
+# 1. The secrets below are DEVELOPMENT defaults. Never use in production.
+# 2. For production, use a secrets manager (Vault, AWS Secrets Manager, etc.)
+#    or a .env file with restricted permissions (chmod 600).
+# 3. PostgreSQL and Redis ports are exposed to the host for convenience.
+#    In production, remove `ports` or bind to 127.0.0.1 only.
+# 4. Generate real secrets before any public deployment:
+#    - JWT_SECRET: openssl rand -base64 48
+#    - ENCRYPTION_KEY: openssl rand -hex 32
+# =============================================================================
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+    compress: "true"
 
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: remitx
       POSTGRES_PASSWORD: remitx
       POSTGRES_DB: remitx
     ports:
-      - '5432:5432'
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U remitx -d remitx"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    logging: *default-logging
     ports:
-      - '6379:6379'
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   api:
-    build: ./apps/api
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
     ports:
-      - '3001:3001'
+      - "3001:3001"
     environment:
+      NODE_ENV: development
+      PORT: 3001
       DATABASE_URL: postgresql://remitx:remitx@postgres:5432/remitx
       REDIS_URL: redis://redis:6379
       JWT_SECRET: change_me_in_production
-      ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      # Replace with a random 32-byte hex master key before deployment.
+      ENCRYPTION_KEY: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
       STELLAR_NETWORK: testnet
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
       ANCHOR_USDC_URL: https://testanchor.stellar.org
       ANCHOR_NGN_URL: https://testanchor.stellar.org
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e 'require(\"http\").get(\"http://127.0.0.1:3001/health\", ()=>process.exit(0)).on(\"error\", ()=>process.exit(1))' "]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   frontend:
-    build: ./apps/frontend
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
     ports:
-      - '3000:3000'
+      - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:3001
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e 'require(\"http\").get(\"http://127.0.0.1:3000\", ()=>process.exit(0)).on(\"error\", ()=>process.exit(1))' "]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   rust-worker:
-    build: ./services/rust-worker
+    build:
+      context: ./services/rust-worker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
     environment:
-      REDIS_URL: redis://redis:6379
-      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      STELLAR_HORIZON_URL: ${STELLAR_HORIZON_URL:-https://horizon-testnet.stellar.org}
+      METRICS_PORT: ${METRICS_PORT:-9898}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-10}
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "ps -ef | grep -q '[w]orker' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
-  fraud-service:
-    build: ./services/python-analytics
+  python-analytics:
+    build:
+      context: ./services/python-analytics
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
     ports:
-      - '8000:8000'
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request, sys; urllib.request.urlopen(\"http://127.0.0.1:8000/health\"); sys.exit(0)' "]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
   pgdata:
+  redisdata:

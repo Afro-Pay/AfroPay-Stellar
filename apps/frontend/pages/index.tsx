@@ -1,41 +1,58 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/router';
+import { useQueryClient } from '@tanstack/react-query';
 import { useWalletStore } from '../store/walletStore';
+import { useBalances, useTransactions } from '../hooks/useWalletData';
 import BalanceCard from '../components/BalanceCard';
 import SendForm from '../components/SendForm';
 import TransactionList from '../components/TransactionList';
-import WalletSetup from '../components/WalletSetup';
+import SkeletonCard from '../components/SkeletonCard';
 
 export default function Dashboard() {
   const router = useRouter();
-  const {
-    balances,
-    transactions,
-    publicKey,
-    fetchBalances,
-    fetchTransactions,
-    fetchPublicKey,
-  } = useWalletStore();
+  const { publicKey, setPublicKey } = useWalletStore();
+  const { data: balances = [], isLoading, error } = useBalances();
+  const { data: transactions = [] } = useTransactions();
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem("token");
     if (!token) {
-      router.push('/login');
+      router.push("/login");
       return;
     }
+    const pk = localStorage.getItem("publicKey");
+    if (pk) setPublicKey(pk);
+  }, [router, setPublicKey]);
 
-    // Fetch wallet status first; if a wallet exists, also load balances and
-    // transaction history.  fetchPublicKey sets publicKey to null on 404 so
-    // WalletSetup is shown automatically to first-time users.
-    fetchPublicKey().then(() => {
-      const { publicKey: pk } = useWalletStore.getState();
-      if (pk) {
-        fetchBalances();
-        fetchTransactions();
-      }
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => {
+    setBalancesLoading(balancesLoading);
+  }, [balancesLoading, setBalancesLoading]);
+
+  useEffect(() => {
+    if (balancesQueryError) {
+      setBalancesError(balancesQueryError.message);
+    } else {
+      setBalancesError(null);
+    }
+  }, [balancesQueryError, setBalancesError]);
+
+  useEffect(() => {
+    if (transactionsQueryError) {
+      setTransactionsError(transactionsQueryError.message);
+    } else {
+      setTransactionsError(null);
+    }
+  }, [transactionsQueryError, setTransactionsError]);
+
+  const retryBalances = () => {
+    clearError('balances');
+    void queryClient.invalidateQueries({ queryKey: ['balances'] });
+  };
+
+  const retryTransactions = () => {
+    clearError('transactions');
+    void queryClient.invalidateQueries({ queryKey: ['transactions'] });
+  };
 
   // Re-fetch balances and transactions once the wallet becomes available
   // (e.g., after the user creates a wallet via WalletSetup).
@@ -48,37 +65,53 @@ export default function Dashboard() {
   }, [publicKey]);
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white p-4 max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6">AfroPay Dashboard</h1>
+    <main className="p-4 max-w-3xl mx-auto">
+      <h1 className="text-2xl font-bold mb-6 text-gray-900 dark:text-white">
+        RemitX Dashboard
+      </h1>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Wallet onboarding — shown only when the user has no wallet yet.     */}
-      {/* ------------------------------------------------------------------ */}
-      {!publicKey && (
-        <section className="mb-6">
-          <WalletSetup />
-        </section>
+      {balancesError && (
+        <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded-xl text-red-300 text-sm flex items-center justify-between gap-3">
+          <span>{balancesError}</span>
+          <button type="button" onClick={retryBalances} className="text-xs font-semibold text-indigo-300 hover:text-indigo-200">
+            Retry
+          </button>
+        </div>
       )}
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Balances — shown once wallet exists.                                */}
-      {/* ------------------------------------------------------------------ */}
-      {publicKey && (
-        <section className="mb-6">
-          <h2 className="text-lg font-semibold mb-2">Balances</h2>
+      {transactionsError && (
+        <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded-xl text-red-300 text-sm flex items-center justify-between gap-3">
+          <span>{transactionsError}</span>
+          <button type="button" onClick={retryTransactions} className="text-xs font-semibold text-indigo-300 hover:text-indigo-200">
+            Retry
+          </button>
+        </div>
+      )}
+
+      <section className="mb-6">
+        <h2 className="text-lg font-semibold mb-2">Balances</h2>
+        {isLoadingBalances ? (
           <div className="grid grid-cols-3 gap-3">
-            {balances.map((b) => (
-              <BalanceCard key={b.asset} {...b} />
-            ))}
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
           </div>
-        </section>
-      )}
+        ) : balances.length === 0 ? (
+          <p className="text-gray-500 text-sm">No balances found — create a wallet to get started.</p>
+        ) : (
+          <div className="grid grid-cols-3 gap-3">
+            {balances.map((b) => <BalanceCard key={b.asset} {...b} />)}
+          </div>
+        )}
+      </section>
 
       {/* ------------------------------------------------------------------ */}
       {/* Send Money — always rendered; SendForm handles the disabled state.  */}
       {/* ------------------------------------------------------------------ */}
       <section className="mb-6">
-        <h2 className="text-lg font-semibold mb-2">Send Money</h2>
+        <h2 className="text-lg font-semibold mb-2 text-gray-900 dark:text-white">
+          Send Money
+        </h2>
         <SendForm />
       </section>
 
@@ -87,7 +120,7 @@ export default function Dashboard() {
       {/* ------------------------------------------------------------------ */}
       <section>
         <h2 className="text-lg font-semibold mb-2">Transaction History</h2>
-        <TransactionList transactions={transactions} />
+        <TransactionList transactions={transactions} isLoading={txLoading} />
       </section>
     </main>
   );

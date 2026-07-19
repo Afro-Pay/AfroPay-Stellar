@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-headless
+  namespace: afropay
+  labels:
+    app: postgres
+spec:
+  ports:
+  - port: 5432
+    name: postgres
+  clusterIP: None
+  selector:
+    app: postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: afropay
+  labels:
+    app: postgres
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgres
+  selector:
+    app: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: afropay
+  labels:
+    app: postgres
+spec:
+  serviceName: "postgres-headless"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16-alpine
+        ports:
+        - containerPort: 5432
+          name: postgres
+        env:
+        - name: POSTGRES_USER
+          value: remitx
+        - name: POSTGRES_DB
+          value: remitx
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: afropay-secrets
+              key: POSTGRES_PASSWORD
+        resources:
+          limits:
+            cpu: "2"
+            memory: 4Gi
+          requests:
+            cpu: "500m"
+            memory: 1Gi
+        volumeMounts:
+        - name: postgres-db-data
+          mountPath: /var/lib/postgresql/data
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - remitx
+            - -d
+            - remitx
+          initialDelaySeconds: 15
+          timeoutSeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - remitx
+            - -d
+            - remitx
+          initialDelaySeconds: 15
+          timeoutSeconds: 5
+          periodSeconds: 10
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-db-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 20Gi
