@@ -2,11 +2,15 @@
 name = "fee-primitives"
 version = "0.1.0"
 edition = "2021"
-description = "Fee calculation primitives for AfroPay-Stellar transfers"
 
 [dependencies]
+soroban-sdk = "21.0.0"
 
-[dev-dependencies]
-# Property-based testing via a bounded fuzz loop (no external crates needed).
-# If proptest is available, it can be added here:
-# proptest = "1"
+[dev_dependencies]
+soroban-sdk = { version = "21.0.0", features = ["testutils"] }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+testutils = ["soroban-sdk/testutils"]

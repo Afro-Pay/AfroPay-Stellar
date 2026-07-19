@@ -3,16 +3,23 @@ import { BullModule } from '@nestjs/bull';
 import { TransactionService } from './transaction.service';
 import { TransactionController } from './transaction.controller';
 import { TransactionProcessor } from './transaction.processor';
+import { TransferSimulationService } from './transfer-simulation.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { WalletModule } from '../wallet/wallet.module';
+import { AuthModule } from '../auth/auth.module';
+import { KycModule } from '../kyc/kyc.module';
+import { AnchorModule } from '../anchor/anchor.module';
 
 @Module({
   imports: [
     BullModule.registerQueue({ name: 'transactions' }),
     PrismaModule,
     WalletModule,
+    AuthModule,
+    KycModule,
+    AnchorModule,
   ],
-  providers: [TransactionService, TransactionProcessor],
+  providers: [TransactionService, TransactionProcessor, TransferSimulationService],
   controllers: [TransactionController],
 })
 export class TransactionModule {}
