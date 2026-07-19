@@ -2,6 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  AuditLogService,
+  AuditCategory,
+  AuditOperation,
+  AuditOutcome,
+} from '../audit/audit.service';
 
 export interface SendTransferDto {
   destinationPublicKey: string;
@@ -14,8 +20,9 @@ export interface SendTransferDto {
 @Injectable()
 export class TransactionService {
   constructor(
-    @InjectQueue('transactions') private txQueue: Queue,
-    private prisma: PrismaService,
+    @InjectQueue('transactions') private readonly txQueue: Queue,
+    private readonly prisma: PrismaService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
   async sendTransfer(userId: string, dto: SendTransferDto) {
@@ -34,6 +41,18 @@ export class TransactionService {
     await this.txQueue.add('process', { txId: tx.id, userId, ...dto }, {
       attempts: 3,
       backoff: { type: 'exponential', delay: 2000 },
+    });
+
+    // Audit: transaction enqueued
+    await this.auditLog.log({
+      userId,
+      category: AuditCategory.TRANSACTION,
+      operation: AuditOperation.TX_SUBMITTED,
+      outcome: AuditOutcome.SUCCESS,
+      amount: dto.amount,
+      assetCode: dto.assetCode,
+      destination: dto.destinationPublicKey,
+      metadata: { txId: tx.id, memo: dto.memo ?? null },
     });
 
     return { txId: tx.id, status: 'PENDING' };

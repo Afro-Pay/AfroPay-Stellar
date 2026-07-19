@@ -1,15 +1,23 @@
 import { WalletService } from './wallet.service';
+import { AuditLogService } from '../audit/audit.service';
 
-// Minimal unit tests without DB — test encryption helpers via reflection
-describe('WalletService encryption', () => {
+// ---------------------------------------------------------------------------
+// Minimal unit tests for WalletService — isolates encryption helpers and
+// auditing from the database and Stellar network.
+// ---------------------------------------------------------------------------
+
+// Mock AuditLogService so audit calls don't require Prisma
+const mockAuditLog: Partial<AuditLogService> = { log: jest.fn().mockResolvedValue(undefined) };
+
+describe('WalletService encryption helpers', () => {
   let service: WalletService;
 
   beforeEach(() => {
-    process.env.ENCRYPTION_KEY = 'a'.repeat(64); // 32-byte hex
-    service = new WalletService(null as any);
+    process.env.ENCRYPTION_KEY = 'a'.repeat(64); // 32-byte hex key
+    service = new WalletService(null as any, mockAuditLog as AuditLogService);
   });
 
-  it('encrypts and decrypts a secret key', () => {
+  it('encrypts and decrypts a secret key round-trip', () => {
     const secret = 'SCZANGBA5YHTNYVSK3TZQOZ6PFPAXDHDWZOBENXVGHD';
     const encrypted = (service as any).encrypt(secret);
     const decrypted = (service as any).decrypt(encrypted);
