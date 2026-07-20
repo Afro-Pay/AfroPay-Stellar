@@ -1,6 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import axios from 'axios';
 import Redis from 'ioredis';
+import { plainToInstance } from 'class-transformer';
+import { validateSync } from 'class-validator';
+import { ClassConstructor } from 'class-transformer';
+import { AnchorReconciliationException } from './anchor.exceptions';
+import { DepositResponseDto } from './dto/deposit-response.dto';
+import { WithdrawResponseDto } from './dto/withdraw-response.dto';
 import {
   CircuitBreakerState,
   FxRateCachePayload,
@@ -78,6 +84,19 @@ export class AnchorService {
     const { data } = await axios.get(`${anchorUrl}/sep6/deposit`, {
       params: { asset_code: asset, account },
     });
+
+    const dto = this.validateAnchorResponse(DepositResponseDto, data, 'deposit');
+
+    // Reconcile the echoed account (when the anchor returns one) against the
+    // account we requested, so a malformed/compromised response cannot redirect
+    // the credit to a different Stellar account.
+    const echoed = dto.stellar_account ?? dto.account ?? dto.account_id;
+    if (echoed && echoed !== account) {
+      throw new AnchorReconciliationException(
+        `Anchor deposit response account (${echoed}) does not match the requested account (${account})`,
+      );
+    }
+
     return data;
   }
 
@@ -86,7 +105,57 @@ export class AnchorService {
     const { data } = await axios.get(`${anchorUrl}/sep6/withdraw`, {
       params: { asset_code: asset, account, amount },
     });
+
+    const dto = this.validateAnchorResponse(WithdrawResponseDto, data, 'withdraw');
+
+    // Reconcile the requested amount against the anchor's advertised bounds.
+    const requested = Number(amount);
+    if (!Number.isNaN(requested)) {
+      if (dto.min_amount != null && requested < dto.min_amount) {
+        throw new AnchorReconciliationException(
+          `Requested amount ${requested} is below the anchor minimum ${dto.min_amount}`,
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      if (dto.max_amount != null && requested > dto.max_amount) {
+        throw new AnchorReconciliationException(
+          `Requested amount ${requested} exceeds the anchor maximum ${dto.max_amount}`,
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+    }
+
     return data;
+  }
+
+  /**
+   * Validates a raw anchor payload against a response DTO. Returns the typed
+   * instance for downstream reconciliation; throws AnchorReconciliationException
+   * (502) if the payload is not an object or violates the schema. The original
+   * `data` is returned to callers unchanged so no anchor-provided fields are
+   * dropped — validation is a gate, not a transform.
+   */
+  private validateAnchorResponse<T extends object>(
+    cls: ClassConstructor<T>,
+    data: unknown,
+    kind: 'deposit' | 'withdraw',
+  ): T {
+    if (data == null || typeof data !== 'object') {
+      throw new AnchorReconciliationException(
+        `Anchor returned a malformed ${kind} response`,
+      );
+    }
+    const dto = plainToInstance(cls, data);
+    const errors = validateSync(dto as object, {
+      whitelist: false,
+      forbidUnknownValues: false,
+    });
+    if (errors.length > 0) {
+      throw new AnchorReconciliationException(
+        `Anchor returned an invalid ${kind} response`,
+      );
+    }
+    return dto;
   }
 
   // Separated method so tests can mock provider behaviour

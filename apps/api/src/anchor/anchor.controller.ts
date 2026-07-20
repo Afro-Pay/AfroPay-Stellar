@@ -1,7 +1,8 @@
-import { Controller, Get, Query, UseGuards, Request, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, Request, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { WalletService } from '../wallet/wallet.service';
+import { AnchorService } from './anchor.service';
 import { StellarAddressPipe } from '../common/pipes/stellar-address.pipe';
 
 @ApiTags('anchor')
@@ -11,6 +12,7 @@ import { StellarAddressPipe } from '../common/pipes/stellar-address.pipe';
 export class AnchorController {
   constructor(
     private readonly walletService: WalletService,
+    private readonly anchorService: AnchorService,
   ) {}
 
   @Get('deposit')
@@ -32,6 +34,7 @@ export class AnchorController {
   @ApiResponse({ status: 400, description: 'Invalid Stellar address' })
   @ApiResponse({ status: 403, description: 'Account does not match user wallet' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 502, description: 'Anchor returned a malformed or inconsistent response' })
   async getDepositInfo(
     @Request() req: any,
     @Query('account', StellarAddressPipe) account: string,
@@ -40,13 +43,8 @@ export class AnchorController {
     // Ownership check: verify the account matches the user's wallet
     await this.validateAccountOwnership(req.user.userId, account);
 
-    // Proceed with the deposit info request
-    return {
-      message: 'Deposit info retrieved',
-      account,
-      assetCode,
-      // Additional deposit info would go here
-    };
+    // Proxy to the anchor; the service validates and reconciles the response.
+    return this.anchorService.getDepositInfo(assetCode, account);
   }
 
   @Get('withdraw')
@@ -61,28 +59,31 @@ export class AnchorController {
     description: 'Asset code',
     type: String,
   })
+  @ApiQuery({
+    name: 'amount',
+    description: 'Withdrawal amount (reconciled against the anchor min/max)',
+    type: String,
+  })
   @ApiResponse({
     status: 200,
     description: 'Withdraw info retrieved successfully',
   })
-  @ApiResponse({ status: 400, description: 'Invalid Stellar address' })
+  @ApiResponse({ status: 400, description: 'Invalid Stellar address or amount out of range' })
   @ApiResponse({ status: 403, description: 'Account does not match user wallet' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 502, description: 'Anchor returned a malformed or inconsistent response' })
   async getWithdrawInfo(
     @Request() req: any,
     @Query('account', StellarAddressPipe) account: string,
     @Query('assetCode') assetCode: string,
+    @Query('amount') amount: string,
   ) {
     // Ownership check: verify the account matches the user's wallet
     await this.validateAccountOwnership(req.user.userId, account);
 
-    // Proceed with the withdraw info request
-    return {
-      message: 'Withdraw info retrieved',
-      account,
-      assetCode,
-      // Additional withdraw info would go here
-    };
+    // Proxy to the anchor; the service validates the response and reconciles the
+    // requested amount against the anchor's advertised min/max.
+    return this.anchorService.getWithdrawInfo(assetCode, account, amount);
   }
 
   @Get('fx-rate')
