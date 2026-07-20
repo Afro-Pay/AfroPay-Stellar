@@ -206,9 +206,30 @@ export class WalletService {
     );
   }
 
+  /**
+   * Returns only the public key — safe to call on every Dashboard mount
+   * without exposing the encrypted secret key.
+   * Throws NotFoundException (404) if the user has no wallet yet.
+   */
+  async getPublicKey(userId: string) {
+    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+    if (!wallet) throw new NotFoundException('Wallet not found');
+    return { publicKey: wallet.publicKey };
+  }
+
   async exportWallet(userId: string) {
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
     if (!wallet) throw new NotFoundException('Wallet not found');
+
+    await this.auditLog.log({
+      userId,
+      category: AuditCategory.WALLET,
+      operation: AuditOperation.WALLET_EXPORTED,
+      outcome: AuditOutcome.SUCCESS,
+      walletPublicKey: wallet.publicKey,
+      metadata: { warning: 'Secret key was exported — review if unexpected.' },
+    });
+
     return {
       publicKey: wallet.publicKey,
       secretKey: this.decrypt(wallet.encryptedSecret, userId),
@@ -223,6 +244,17 @@ export class WalletService {
       update: { publicKey: keypair.publicKey(), encryptedSecret },
       create: { userId, publicKey: keypair.publicKey(), encryptedSecret },
     });
+
+    await this.auditLog.log({
+      userId,
+      category: AuditCategory.WALLET,
+      operation: AuditOperation.WALLET_IMPORTED,
+      outcome: AuditOutcome.SUCCESS,
+      walletPublicKey: wallet.publicKey,
+      metadata: { action: 'Existing secret key imported/overwritten.' },
+    });
+
+    return wallet;
   }
 
   async getKeypair(userId: string): Promise<Keypair> {

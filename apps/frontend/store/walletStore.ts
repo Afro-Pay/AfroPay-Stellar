@@ -77,4 +77,39 @@ export const useWalletStore = create<WalletStore>((set) => ({
     const { data } = await api.post('/transactions/simulate', payload);
     return data;
   },
+
+  createWallet: async () => {
+    set({ loading: true, error: null });
+    try {
+      // POST /wallet/create returns { publicKey: string }
+      const { data } = await api.post<{ publicKey: string }>('/wallet/create');
+      set({ publicKey: data.publicKey, loading: false });
+    } catch (err: any) {
+      const message =
+        err?.response?.data?.message ?? err?.message ?? 'Failed to create wallet.';
+      set({ loading: false, error: message });
+    }
+  },
+
+  fetchPublicKey: async () => {
+    set({ loading: true, error: null });
+    try {
+      // GET /wallet/public-key returns { publicKey: string }
+      // Returns 404 when no wallet exists — expected for new users.
+      const { data } = await api.get<{ publicKey: string }>('/wallet/public-key');
+      set({ publicKey: data.publicKey, loading: false });
+    } catch (err: any) {
+      // 404 means the user has no wallet yet — this is an expected state,
+      // not an error that should be surfaced in the UI.
+      if (err?.response?.status === 404) {
+        set({ publicKey: null, loading: false });
+      } else {
+        const message =
+          err?.response?.data?.message ?? err?.message ?? 'Failed to fetch wallet.';
+        set({ loading: false, error: message });
+      }
+    }
+  },
+
+  clearError: () => set({ error: null }),
 }));
