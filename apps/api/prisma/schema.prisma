@@ -72,6 +72,9 @@ model Transaction {
   assetIssuer    String?
   /// Optional transaction memo.
   memo           String?
+  /// Client-supplied idempotency key (UUID) from the `Idempotency-Key` header
+  /// on POST /transactions/send. Null when the client omits the header.
+  idempotencyKey String?
   /// Lifecycle state of this transaction.
   status         TransactionStatus @default(PENDING)
   /// Stellar transaction hash once submitted; unique across all confirmed txs.
@@ -86,6 +89,11 @@ model Transaction {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
 
+  /// Guarantees at most one transaction per (user, idempotency key), so a
+  /// retried POST /transactions/send cannot create a duplicate transfer.
+  /// Postgres treats NULLs as distinct, so transactions without a key (the
+  /// header is optional) are unaffected.
+  @@unique([userId, idempotencyKey])
   /// Speeds up per-user history queries (ordered by newest first).
   @@index([userId, createdAt(sort: Desc)])
   /// Speeds up per-wallet history queries.

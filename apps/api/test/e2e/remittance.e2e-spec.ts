@@ -225,6 +225,84 @@ describe('Remittance E2E', () => {
   });
 
   // -------------------------------------------------------------------------
+  // 3b. Idempotent send (Idempotency-Key header)
+  // -------------------------------------------------------------------------
+  describe('idempotent send', () => {
+    let idemToken: string;
+    let originalTxId: string;
+
+    const body = {
+      destinationPublicKey: DEST_KEY,
+      amount: '10',
+      assetCode: 'USDC',
+      assetIssuer: USDC_ISSUER,
+      memo: 'idem-e2e',
+    };
+    const key = '11111111-2222-4333-8444-555555555555';
+
+    beforeAll(async () => {
+      // Fresh user so cumulative spend stays clear of the KYC daily limit.
+      const reg = await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({ email: uniqueEmail(), password: 'Password1!' })
+        .expect(201);
+      idemToken = reg.body.access_token;
+
+      await request(app.getHttpServer())
+        .post('/wallet/create')
+        .set('Authorization', `Bearer ${idemToken}`)
+        .expect(201);
+    });
+
+    it('first request creates the transfer (201)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/transactions/send')
+        .set('Authorization', `Bearer ${idemToken}`)
+        .set('Idempotency-Key', key)
+        .send(body)
+        .expect(201);
+
+      expect(res.body.txId).toBeDefined();
+      expect(res.body.status).toBe('PENDING');
+      originalTxId = res.body.txId;
+    });
+
+    it('duplicate with the same key replays the original (200) — identical txId, no new record', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/transactions/send')
+        .set('Authorization', `Bearer ${idemToken}`)
+        .set('Idempotency-Key', key)
+        .send(body)
+        .expect(200);
+
+      // Same transaction id proves no second row was created.
+      expect(res.body.txId).toBe(originalTxId);
+      expect(res.body.status).toBe('PENDING');
+    });
+
+    it('a different key creates a new transfer (201) with a different txId', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/transactions/send')
+        .set('Authorization', `Bearer ${idemToken}`)
+        .set('Idempotency-Key', '99999999-8888-4777-8666-555555555555')
+        .send(body)
+        .expect(201);
+
+      expect(res.body.txId).toBeDefined();
+      expect(res.body.txId).not.toBe(originalTxId);
+    });
+
+    it('rejects a malformed Idempotency-Key (400)', async () => {
+      await request(app.getHttpServer())
+        .post('/transactions/send')
+        .set('Authorization', `Bearer ${idemToken}`)
+        .set('Idempotency-Key', 'not-a-uuid')
+        .send(body)
+        .expect(400);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // 4. Anchor withdrawal — happy path
   // -------------------------------------------------------------------------
   describe('anchor withdrawal', () => {
