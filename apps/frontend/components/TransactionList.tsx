@@ -36,7 +36,7 @@ export default function TransactionList({ transactions, isLoading }: { transacti
   if (!transactions.length) return <p className="text-gray-500 text-sm">No transactions yet.</p>;
 
   return (
-    <ul className="space-y-2">
+    <ul className="space-y-2" aria-label="Transaction history">
       {transactions.map((tx) => (
         <li key={tx.id} className="bg-gray-900 rounded-xl p-4 flex justify-between items-center">
           <div>

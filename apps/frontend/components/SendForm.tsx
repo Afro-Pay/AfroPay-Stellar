@@ -21,6 +21,7 @@ export default function SendForm() {
   const [simulation, setSimulation] = useState<SimulationResult | null>(null);
   const [countdown, setCountdown] = useState<number>(0);
   const [lastSimulationTime, setLastSimulationTime] = useState<number>(0);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const previewHeaderRef = useRef<HTMLHeadingElement>(null);
   const amountInputRef = useRef<HTMLInputElement>(null);
@@ -139,6 +140,7 @@ export default function SendForm() {
       await sendTransfer(form);
       setStep('edit');
       setSimulation(null);
+      setStatusMessage('Transfer submitted successfully.');
       setForm({
         destinationPublicKey: "",
         amount: "",
@@ -357,8 +359,8 @@ export default function SendForm() {
       )}
 
       {!loading && !isLoadingSend && (
-        <p id="send-form-status" className="text-xs text-center text-gray-400 pt-1" role="status" aria-live="polite">
-          Review the quote and confirm when ready.
+        <p id="send-form-status" className="text-xs text-center text-gray-400 pt-1" role="status" aria-live="polite" aria-atomic="true">
+          {statusMessage ?? 'Review the quote and confirm when ready.'}
         </p>
       )}
     </form>
