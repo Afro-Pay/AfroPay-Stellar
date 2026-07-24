@@ -1,4 +1,13 @@
+jest.mock('axios', () => ({
+  __esModule: true,
+  default: { get: jest.fn() },
+}));
+
+import axios from 'axios';
 import { AnchorService } from './anchor.service';
+import { AnchorReconciliationException } from './anchor.exceptions';
+
+const mockedAxios = axios as unknown as { get: jest.Mock };
 
 describe('AnchorService', () => {
   let service: AnchorService;
@@ -180,6 +189,102 @@ describe('AnchorService', () => {
       }
       // Breaker never opens: the anchor is still consulted on every call.
       expect(stubFetch).toHaveBeenCalledTimes(5);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // SEP-6 deposit/withdraw response validation and reconciliation (#137)
+  // -------------------------------------------------------------------------
+  describe('SEP-6 response validation', () => {
+    const USER_ACCOUNT = 'GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+    const OTHER_ACCOUNT = 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
+
+    beforeEach(() => {
+      mockedAxios.get.mockReset();
+    });
+
+    describe('getDepositInfo', () => {
+      it('returns the anchor payload unchanged when the response is valid', async () => {
+        const payload = { how: 'Send USD to bank X', min_amount: 5, max_amount: 1000 };
+        mockedAxios.get.mockResolvedValue({ data: payload });
+
+        await expect(service.getDepositInfo('USDC', USER_ACCOUNT)).resolves.toEqual(payload);
+      });
+
+      it('throws on a malformed (non-object) response', async () => {
+        mockedAxios.get.mockResolvedValue({ data: 'not-json' });
+
+        await expect(service.getDepositInfo('USDC', USER_ACCOUNT)).rejects.toBeInstanceOf(
+          AnchorReconciliationException,
+        );
+      });
+
+      it('throws when a field violates the SEP-6 schema', async () => {
+        mockedAxios.get.mockResolvedValue({ data: { min_amount: 'lots' } });
+
+        await expect(service.getDepositInfo('USDC', USER_ACCOUNT)).rejects.toBeInstanceOf(
+          AnchorReconciliationException,
+        );
+      });
+
+      it('throws when the response account does not match the requested account', async () => {
+        mockedAxios.get.mockResolvedValue({ data: { stellar_account: OTHER_ACCOUNT } });
+
+        await expect(service.getDepositInfo('USDC', USER_ACCOUNT)).rejects.toBeInstanceOf(
+          AnchorReconciliationException,
+        );
+      });
+
+      it('passes when the response echoes the matching account', async () => {
+        const payload = { stellar_account: USER_ACCOUNT, how: 'Send USD' };
+        mockedAxios.get.mockResolvedValue({ data: payload });
+
+        await expect(service.getDepositInfo('USDC', USER_ACCOUNT)).resolves.toEqual(payload);
+      });
+    });
+
+    describe('getWithdrawInfo', () => {
+      it('returns the anchor payload when the amount is within range', async () => {
+        const payload = { account_id: OTHER_ACCOUNT, min_amount: 10, max_amount: 1000, fee_fixed: 0.5 };
+        mockedAxios.get.mockResolvedValue({ data: payload });
+
+        await expect(service.getWithdrawInfo('USDC', USER_ACCOUNT, '50')).resolves.toEqual(payload);
+      });
+
+      it('throws on a malformed response', async () => {
+        mockedAxios.get.mockResolvedValue({ data: null });
+
+        await expect(service.getWithdrawInfo('USDC', USER_ACCOUNT, '50')).rejects.toBeInstanceOf(
+          AnchorReconciliationException,
+        );
+      });
+
+      it('throws when the requested amount is below the anchor minimum', async () => {
+        mockedAxios.get.mockResolvedValue({ data: { min_amount: 100, max_amount: 1000 } });
+
+        await expect(service.getWithdrawInfo('USDC', USER_ACCOUNT, '50')).rejects.toBeInstanceOf(
+          AnchorReconciliationException,
+        );
+      });
+
+      it('throws when the requested amount exceeds the anchor maximum', async () => {
+        mockedAxios.get.mockResolvedValue({ data: { min_amount: 10, max_amount: 100 } });
+
+        await expect(service.getWithdrawInfo('USDC', USER_ACCOUNT, '500')).rejects.toBeInstanceOf(
+          AnchorReconciliationException,
+        );
+      });
+
+      it('does not reconcile the amount when the anchor omits min/max', async () => {
+        const payload = {
+          account_id: OTHER_ACCOUNT,
+          type: 'non_interactive_customer_info_needed',
+          fields: {},
+        };
+        mockedAxios.get.mockResolvedValue({ data: payload });
+
+        await expect(service.getWithdrawInfo('USDC', USER_ACCOUNT, '50')).resolves.toEqual(payload);
+      });
     });
   });
 });

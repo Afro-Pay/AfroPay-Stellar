@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AnchorController } from '../anchor.controller';
+import { AnchorService } from '../anchor.service';
 import { WalletService } from '../../wallet/wallet.service';
 import { ForbiddenException } from '@nestjs/common';
 
@@ -18,6 +19,14 @@ describe('AnchorController', () => {
           provide: WalletService,
           useValue: {
             findByUserId: jest.fn(),
+          },
+        },
+        {
+          provide: AnchorService,
+          useValue: {
+            getDepositInfo: jest.fn(),
+            getWithdrawInfo: jest.fn(),
+            getFxRate: jest.fn(),
           },
         },
       ],
