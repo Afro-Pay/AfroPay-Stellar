@@ -240,6 +240,12 @@ Send a transaction to another Stellar public key.
 
 **Endpoint:** `POST /transactions/send`
 
+**Headers:**
+
+| Header | Required | Description |
+|---|---|---|
+| `Idempotency-Key` | No | UUID identifying this logical transfer. Retrying with the same key returns the original response and never creates a second transfer. See [Idempotency](#idempotency) below. |
+
 **Request DTO:**
 - `destinationPublicKey` (string): The recipient's public key.
 - `amount` (string): The amount to send.
@@ -257,12 +263,52 @@ Send a transaction to another Stellar public key.
 }
 ```
 
-**Example Response:**
+**Example Response (`201 Created`):**
 ```json
 {
-  "transactionId": "abc123def456...",
-  "status": "success",
-  "hash": "c4d5e..."
+  "txId": "9f8c1e2a-7d3b-4c1a-8e2f-2b7c9e0f1a23",
+  "status": "PENDING"
+}
+```
+
+The transfer is accepted and enqueued asynchronously; `status` is `PENDING` until the settlement worker updates it.
+
+#### Idempotency
+
+`POST /transactions/send` is **not safe to retry blindly** — without an idempotency key, a network retry or client re-POST creates a second transaction and enqueues a second settlement job, risking a double-spend of the same logical transfer.
+
+To make a send safely retryable, supply an `Idempotency-Key` header:
+
+```
+Idempotency-Key: 3f6d1e2a-9c4b-4b2e-8a1d-2b7c9e0f1a23
+```
+
+| Aspect | Behaviour |
+|---|---|
+| **Format** | RFC 4122 UUID. A malformed value returns `400 Bad Request`. |
+| **First request** | Processed normally; returns `201 Created` with `{ txId, status }`. |
+| **Retry (same key, within 24h)** | Returns the **original** response with `200 OK`. No new transaction row, no new queue job. |
+| **Different key** | Treated as a new transfer (`201 Created`, new `txId`). |
+| **Scope** | Keys are scoped per user (`idempotency:{userId}:{key}`). The same key from two different users never collides. |
+| **Retention** | Cached responses live for **24 hours**. After that the key is forgotten and a reuse is treated as a new transfer. |
+
+**Guarantees.** Idempotency is enforced at three layers, so even concurrent retries cannot slip through:
+
+1. A Redis response cache (`idempotency:{userId}:{key}`, 24h TTL) short-circuits completed duplicates.
+2. A unique constraint on `(userId, idempotencyKey)` in the `Transaction` table rejects a concurrent duplicate at insert time — **before** any job is enqueued.
+3. The settlement job is enqueued with a deterministic id derived from the key, so the queue collapses duplicate jobs into one.
+
+**Scope note.** This covers the API layer (duplicate rows and duplicate enqueues). Deduplication inside the settlement worker is a separate concern and out of scope here.
+
+**Example — retried request replays the original response:**
+```
+POST /transactions/send
+Idempotency-Key: 3f6d1e2a-9c4b-4b2e-8a1d-2b7c9e0f1a23
+
+→ 200 OK
+{
+  "txId": "9f8c1e2a-7d3b-4c1a-8e2f-2b7c9e0f1a23",
+  "status": "PENDING"
 }
 ```
 
