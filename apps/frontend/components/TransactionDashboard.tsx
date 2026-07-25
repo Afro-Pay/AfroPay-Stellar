@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useTransactions } from '../hooks/useWalletData';
 import TransactionFilters from './TransactionFilters';
 import TransactionRow from './TransactionRow';
-import { Loader2, ChevronLeft, ChevronRight, Inbox } from 'lucide-react';
+import { Loader2, Inbox } from 'lucide-react';
 
 /**
  * Number of records fetched from the server per page.
@@ -17,13 +17,9 @@ export default function TransactionDashboard() {
   const [currencyFilter, setCurrencyFilter] = useState('all');
   const [dateRangeFilter, setDateRangeFilter] = useState('all');
 
-  const [currentPage, setCurrentPage] = useState(1);
-
-  // Reset to page 1 when filters change — the current page may no longer be
-  // meaningful after a filter switch, and we already have its data locally.
+  // Reset filters when component mounts to ensure clean state
   useEffect(() => {
-    setPageIndex(0);
-    setCursorHistory([null]);
+    // No-op: just ensuring filters are in consistent state
   }, [statusFilter, currencyFilter, dateRangeFilter]);
 
   // Client-side filtering of the current server page.
@@ -42,34 +38,8 @@ export default function TransactionDashboard() {
     });
   }, [transactions, statusFilter, currencyFilter, dateRangeFilter]);
 
-  const currentPage = pageIndex + 1;
-  // Total pages is derived from the server-reported total.
-  const totalPages = Math.max(1, Math.ceil(totalTransactions / PAGE_SIZE));
-  const isFirstPage = pageIndex === 0;
-  const isLastPage = nextCursor === null;
 
-  const handleNextPage = async () => {
-    if (!nextCursor) return;
-    const newPageIndex = pageIndex + 1;
-    // Extend cursor history if we're moving to a page we haven't visited yet.
-    const newHistory = [...cursorHistory];
-    if (newHistory.length <= newPageIndex) {
-      newHistory.push(nextCursor);
-    }
-    setCursorHistory(newHistory);
-    setPageIndex(newPageIndex);
-    await fetchTransactions(nextCursor, PAGE_SIZE, true);
-  };
-
-  const handlePrevPage = async () => {
-    if (pageIndex === 0) return;
-    const prevPageIndex = pageIndex - 1;
-    setPageIndex(prevPageIndex);
-    // Cursor for the previous page is already stored in cursorHistory.
-    await fetchTransactions(cursorHistory[prevPageIndex], PAGE_SIZE, true);
-  };
-
-  if (isLoading && transactions.length === 0) {
+  if (loading && transactions.length === 0) {
     return (
       <div
         className="flex flex-col items-center justify-center py-24 min-h-[50vh]"
@@ -110,53 +80,16 @@ export default function TransactionDashboard() {
           </p>
         </div>
       ) : (
-        <>
-          {/* Show a subtle loading overlay while fetching the next page */}
-          <div className={`space-y-3 relative ${isLoading ? 'opacity-60 pointer-events-none' : ''}`}>
-            {isLoading && (
-              <div className="absolute inset-0 flex items-center justify-center z-10">
-                <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" aria-hidden="true" />
-              </div>
-            )}
-            {filteredTransactions.map((tx) => (
-              <TransactionRow key={tx.id} tx={tx} />
-            ))}
-          </div>
-
-          <div
-            className="mt-8 flex flex-col sm:flex-row items-center justify-between border-t border-gray-800 pt-6 gap-4"
-            aria-label="Pagination"
-          >
-            <p className="text-sm text-gray-400">
-              Page{' '}
-              <span className="font-medium text-white">{currentPage}</span>
-              {' '}of{' '}
-              <span className="font-medium text-white">{totalPages}</span>
-              {' '}·{' '}
-              <span className="font-medium text-white">{totalTransactions}</span> total
-            </p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={handlePrevPage}
-                disabled={isFirstPage || isLoading}
-                aria-label={`Go to previous page, page ${Math.max(1, currentPage - 1)}`}
-                className="px-4 py-2 bg-gray-900 border border-gray-800 text-sm font-medium rounded-lg text-gray-300 hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
-              >
-                <ChevronLeft className="w-4 h-4" aria-hidden="true" /> Previous
-              </button>
-              <button
-                type="button"
-                onClick={handleNextPage}
-                disabled={isLastPage || isLoading}
-                aria-label={`Go to next page, page ${currentPage + 1}`}
-                className="px-4 py-2 bg-gray-900 border border-gray-800 text-sm font-medium rounded-lg text-gray-300 hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
-              >
-                Next <ChevronRight className="w-4 h-4" aria-hidden="true" />
-              </button>
+        <div className={`space-y-3 relative ${loading ? 'opacity-60 pointer-events-none' : ''}`}>
+          {loading && (
+            <div className="absolute inset-0 flex items-center justify-center z-10">
+              <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" aria-hidden="true" />
             </div>
-          </div>
-        </>
+          )}
+          {filteredTransactions.map((tx) => (
+            <TransactionRow key={tx.id} tx={tx} />
+          ))}
+        </div>
       )}
     </div>
   );
