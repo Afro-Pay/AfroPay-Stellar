@@ -267,3 +267,87 @@ fn test_persistent_storage_long_term_persistence() {
     assert!(final_ttl > intermediate_ttl);
     assert!(final_ttl >= 6_300_000);
 }
+
+#[test]
+fn test_boundary_condition_exact_timestamp_release_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let depositor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let sac = env.register_stellar_asset_contract_v2(token_admin);
+    let token_id = sac.address();
+    let token_client = token::Client::new(&env, &token_id);
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_id);
+
+    token_admin_client.mint(&depositor, &1000);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    env.ledger().set_sequence_number(100);
+    env.ledger().set_timestamp(100);
+
+    let release_timestamp = 200;
+    let escrow_id = client.deposit(&depositor, &400, &token_id, &recipient, &release_timestamp);
+
+    // Advance to exact release_timestamp boundary (timestamp == release_timestamp)
+    env.ledger().set_sequence_number(200);
+    env.ledger().set_timestamp(release_timestamp);
+
+    // Verify release succeeds at exact timestamp boundary
+    // The release check is: if current_ledger_time < release_timestamp, panic
+    // So at current_ledger_time == release_timestamp, it should succeed
+    client.release(&escrow_id);
+
+    // Verify recipient received funds
+    assert_eq!(token_client.balance(&recipient), 400);
+    assert_eq!(token_client.balance(&contract_id), 0);
+
+    // Verify record is marked as released
+    let updated_record = client.get_escrow(&escrow_id).unwrap();
+    assert!(updated_record.is_released);
+}
+
+#[test]
+fn test_boundary_condition_exact_timestamp_refund_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let depositor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let sac = env.register_stellar_asset_contract_v2(token_admin);
+    let token_id = sac.address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_id);
+
+    token_admin_client.mint(&depositor, &1000);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    env.ledger().set_sequence_number(100);
+    env.ledger().set_timestamp(100);
+
+    let release_timestamp = 200;
+    let escrow_id = client.deposit(&depositor, &400, &token_id, &recipient, &release_timestamp);
+
+    // Advance to exact release_timestamp boundary (timestamp == release_timestamp)
+    env.ledger().set_sequence_number(200);
+    env.ledger().set_timestamp(release_timestamp);
+
+    // Verify refund fails at exact timestamp boundary
+    // The refund check is: if current_ledger_time >= release_timestamp, panic
+    // So at current_ledger_time == release_timestamp, it should panic
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.refund(&escrow_id);
+    }));
+    assert!(result.is_err(), "refund should panic at exact timestamp boundary");
+
+    // Verify funds still in contract (not refunded)
+    let token_client = token::Client::new(&env, &token_id);
+    assert_eq!(token_client.balance(&contract_id), 400);
+}
