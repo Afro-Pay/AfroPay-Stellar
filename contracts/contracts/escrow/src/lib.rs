@@ -11,6 +11,7 @@ pub const VERSION: u32 = 1;
 pub enum DataKey {
     EscrowCounter,
     Escrow(U256),
+    ReentrancyGuard(U256),
 }
 
 #[contracttype]
@@ -32,16 +33,20 @@ pub struct Contract;
 #[contractimpl]
 impl Contract {
     /// Deposit funds into escrow.
-    /// 
+    ///
     /// # Arguments
     /// * `from` - The address depositing the funds
     /// * `amount` - The amount to deposit (must be positive)
     /// * `asset` - The asset contract address
     /// * `recipient` - The address that will receive the funds upon release
     /// * `release_timestamp` - The Unix timestamp when funds can be released
-    /// 
+    ///
     /// # Returns
     /// The unique escrow ID
+    ///
+    /// # Reentrancy Guard
+    /// This function follows the checks-effects-interactions pattern: all validations
+    /// and state updates are performed before the external token transfer.
     pub fn deposit(
         env: Env,
         from: Address,
@@ -61,11 +66,7 @@ impl Contract {
             panic!("release_timestamp must be in the future");
         }
 
-        // Transfer tokens from depositor to contract
-        let token_client = token::Client::new(&env, &asset);
-        token_client.transfer(&from, &env.current_contract_address(), &amount);
-
-        // Generate escrow ID
+        // Effects: Generate and store escrow record before external call
         let mut counter: u64 = env
             .storage()
             .instance()
@@ -76,7 +77,6 @@ impl Contract {
 
         let escrow_id = U256::from_u128(&env, counter as u128);
 
-        // Create escrow record
         let record = EscrowRecord {
             depositor: from.clone(),
             recipient: recipient.clone(),
@@ -90,37 +90,51 @@ impl Contract {
 
         let escrow_key = DataKey::Escrow(escrow_id.clone());
 
-        // Store escrow record in persistent storage
         env.storage()
             .persistent()
             .set(&escrow_key, &record);
 
-        // Set storage TTL to 1 year
-        let one_year_ledgers = 31_536_000; // Approximate seconds in a year
+        let one_year_ledgers = 31_536_000;
 
-        // Extend persistent key TTL
         env.storage()
             .persistent()
             .extend_ttl(&escrow_key, one_year_ledgers, one_year_ledgers);
 
-        // Extend instance TTL
         env.storage()
             .instance()
             .extend_ttl(one_year_ledgers, one_year_ledgers);
+
+        // Interactions: Transfer tokens from depositor to contract (external call)
+        let token_client = token::Client::new(&env, &asset);
+        token_client.transfer(&from, &env.current_contract_address(), &amount);
 
         escrow_id
     }
 
     /// Release funds from escrow to the recipient.
-    /// 
+    ///
     /// # Arguments
     /// * `escrow_id` - The unique escrow ID
-    /// 
+    ///
     /// # Requirements
     /// * The release_timestamp must have passed
     /// * The escrow must not have been released or refunded already
+    ///
+    /// # Reentrancy Guard
+    /// This function follows the checks-effects-interactions pattern: all state
+    /// checks and updates are performed before the external token transfer. A
+    /// reentrancy guard flag is set before the external call to prevent logical
+    /// reentrancy if the token contract (or contracts it invokes) attempt to call
+    /// back into this contract.
     pub fn release(env: Env, escrow_id: U256) {
         let escrow_key = DataKey::Escrow(escrow_id.clone());
+        let guard_key = DataKey::ReentrancyGuard(escrow_id.clone());
+
+        // Check: ensure this escrow is not already being processed
+        if env.storage().persistent().has(&guard_key) {
+            panic!("escrow release already in progress");
+        }
+
         let mut record: EscrowRecord = env
             .storage()
             .persistent()
@@ -140,7 +154,20 @@ impl Contract {
             panic!("release timestamp not reached");
         }
 
-        // Transfer tokens from contract to recipient
+        // Effects: Update record before external call (checks-effects-interactions pattern)
+        record.is_released = true;
+
+        let one_year_ledgers = 31_536_000;
+        env.storage()
+            .persistent()
+            .extend_ttl(&escrow_key, one_year_ledgers, one_year_ledgers);
+
+        env.storage().persistent().set(&escrow_key, &record);
+
+        // Set reentrancy guard before external call
+        env.storage().persistent().set(&guard_key, &true);
+
+        // Interactions: Transfer tokens from contract to recipient (external call)
         let token_client = token::Client::new(&env, &record.asset);
         token_client.transfer(
             &env.current_contract_address(),
@@ -148,29 +175,35 @@ impl Contract {
             &record.amount,
         );
 
-        // Update record
-        record.is_released = true;
-
-        // Extend persistent key TTL before update
-        let one_year_ledgers = 31_536_000;
-        env.storage()
-            .persistent()
-            .extend_ttl(&escrow_key, one_year_ledgers, one_year_ledgers);
-
-        env.storage().persistent().set(&escrow_key, &record);
+        // Clear reentrancy guard after external call
+        env.storage().persistent().del(&guard_key);
     }
 
     /// Refund funds from escrow back to the depositor.
-    /// 
+    ///
     /// # Arguments
     /// * `escrow_id` - The unique escrow ID
-    /// 
+    ///
     /// # Requirements
     /// * Only the depositor can request a refund
     /// * The escrow must not have been released or refunded already
-    /// * The release_timestamp must not have passed (or be within a reasonable grace period)
+    /// * The release_timestamp must not have passed
+    ///
+    /// # Reentrancy Guard
+    /// This function follows the checks-effects-interactions pattern: all state
+    /// checks and updates are performed before the external token transfer. A
+    /// reentrancy guard flag is set before the external call to prevent logical
+    /// reentrancy if the token contract (or contracts it invokes) attempt to call
+    /// back into this contract.
     pub fn refund(env: Env, escrow_id: U256) {
         let escrow_key = DataKey::Escrow(escrow_id.clone());
+        let guard_key = DataKey::ReentrancyGuard(escrow_id.clone());
+
+        // Check: ensure this escrow is not already being processed
+        if env.storage().persistent().has(&guard_key) {
+            panic!("escrow refund already in progress");
+        }
+
         let mut record: EscrowRecord = env
             .storage()
             .persistent()
@@ -193,7 +226,20 @@ impl Contract {
             panic!("cannot refund after release timestamp");
         }
 
-        // Transfer tokens from contract back to depositor
+        // Effects: Update record before external call (checks-effects-interactions pattern)
+        record.is_refunded = true;
+
+        let one_year_ledgers = 31_536_000;
+        env.storage()
+            .persistent()
+            .extend_ttl(&escrow_key, one_year_ledgers, one_year_ledgers);
+
+        env.storage().persistent().set(&escrow_key, &record);
+
+        // Set reentrancy guard before external call
+        env.storage().persistent().set(&guard_key, &true);
+
+        // Interactions: Transfer tokens from contract back to depositor (external call)
         let token_client = token::Client::new(&env, &record.asset);
         token_client.transfer(
             &env.current_contract_address(),
@@ -201,16 +247,8 @@ impl Contract {
             &record.amount,
         );
 
-        // Update record
-        record.is_refunded = true;
-
-        // Extend persistent key TTL before update
-        let one_year_ledgers = 31_536_000;
-        env.storage()
-            .persistent()
-            .extend_ttl(&escrow_key, one_year_ledgers, one_year_ledgers);
-
-        env.storage().persistent().set(&escrow_key, &record);
+        // Clear reentrancy guard after external call
+        env.storage().persistent().del(&guard_key);
     }
 
     /// Get the escrow record by ID.
