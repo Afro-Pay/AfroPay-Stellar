@@ -1,8 +1,9 @@
 import React from 'react';
 import Head from 'next/head';
+import { withAuth } from '../lib/withAuth';
 import TransactionDashboard from '../components/TransactionDashboard';
 
-export default function TransactionsPage() {
+function TransactionsPage() {
   return (
     <div className="min-h-screen bg-black">
       <Head>
@@ -16,3 +17,5 @@ export default function TransactionsPage() {
     </div>
   );
 }
+
+export default withAuth(TransactionsPage);
