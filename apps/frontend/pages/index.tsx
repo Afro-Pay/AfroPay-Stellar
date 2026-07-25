@@ -1,30 +1,23 @@
 import { useEffect } from 'react';
-import { useRouter } from 'next/router';
 import { useWalletStore } from '../store/walletStore';
 import { useBalances, useTransactions } from '../hooks/useWalletData';
+import { withAuth } from '../lib/withAuth';
 import BalanceCard from '../components/BalanceCard';
 import SendForm from '../components/SendForm';
 import TransactionList from '../components/TransactionList';
 import SkeletonCard from '../components/SkeletonCard';
 
-export default function Dashboard() {
-  const router = useRouter();
+function Dashboard() {
   const { setPublicKey } = useWalletStore();
   const { data: balances = [], isLoading: isLoadingBalances, error: balancesError } = useBalances();
   const { data: transactions = [], isLoading: isLoadingTransactions, error: transactionsError } = useTransactions();
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      router.push('/login');
-      return;
-    }
-
     const pk = localStorage.getItem('publicKey');
     if (pk) {
       setPublicKey(pk);
     }
-  }, [router, setPublicKey]);
+  }, [setPublicKey]);
 
   return (
     <main id="main-content" tabIndex={-1} className="p-4 max-w-3xl mx-auto">
@@ -34,13 +27,13 @@ export default function Dashboard() {
 
       {balancesError && (
         <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded-xl text-red-300 text-sm" role="alert" aria-live="assertive">
-          <span>{balancesError}</span>
+          <span>{balancesError instanceof Error ? balancesError.message : String(balancesError)}</span>
         </div>
       )}
 
       {transactionsError && (
         <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded-xl text-red-300 text-sm" role="alert" aria-live="assertive">
-          <span>{transactionsError}</span>
+          <span>{transactionsError instanceof Error ? transactionsError.message : String(transactionsError)}</span>
         </div>
       )}
 
@@ -75,3 +68,5 @@ export default function Dashboard() {
     </main>
   );
 }
+
+export default withAuth(Dashboard);

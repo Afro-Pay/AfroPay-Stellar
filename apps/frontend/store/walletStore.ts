@@ -10,12 +10,15 @@ interface WalletStore {
   sendError: string | null;
   isLoadingBalances: boolean;
   isLoadingSend: boolean;
+  loading: boolean;
+  error: string | null;
 
   setPublicKey: (key: string | null) => void;
   setBalancesError: (error: string | null) => void;
   setTransactionsError: (error: string | null) => void;
   setSendError: (error: string | null) => void;
   clearError: (action: WalletAction) => void;
+  clearWalletError: () => void;
   setBalancesLoading: (isLoading: boolean) => void;
   setSendLoading: (isLoading: boolean) => void;
   sendTransfer: (data: {
@@ -28,6 +31,8 @@ interface WalletStore {
     assetCode: string;
     assetIssuer?: string;
   }) => Promise<SimulationResult>;
+  createWallet: () => Promise<void>;
+  fetchPublicKey: () => Promise<void>;
 }
 
 export const useWalletStore = create<WalletStore>((set) => ({
@@ -37,6 +42,8 @@ export const useWalletStore = create<WalletStore>((set) => ({
   sendError: null,
   isLoadingBalances: false,
   isLoadingSend: false,
+  loading: false,
+  error: null,
 
   setPublicKey: (key) => set({ publicKey: key }),
   setBalancesError: (error) => set({ balancesError: error }),
@@ -55,6 +62,7 @@ export const useWalletStore = create<WalletStore>((set) => ({
 
     set({ sendError: null });
   },
+  clearWalletError: () => set({ error: null }),
   setBalancesLoading: (isLoading) => set({ isLoadingBalances: isLoading }),
   setSendLoading: (isLoading) => set({ isLoadingSend: isLoading }),
 
@@ -110,6 +118,4 @@ export const useWalletStore = create<WalletStore>((set) => ({
       }
     }
   },
-
-  clearError: () => set({ error: null }),
 }));

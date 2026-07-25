@@ -17,6 +17,7 @@ function QrCanvas({ value }: { value: string }) {
   useEffect(() => {
     let cancelled = false;
     // Attempt to dynamically import the optional `qrcode` package.
+    // @ts-expect-error - qrcode is an optional dependency
     import('qrcode')
       .then((QRCode) => {
         if (cancelled || !canvasRef.current) return;
@@ -85,7 +86,7 @@ function CopyButton({ text }: { text: string }) {
 // WalletSetup — shown on Dashboard when publicKey === null.
 // ---------------------------------------------------------------------------
 export default function WalletSetup() {
-  const { publicKey, loading, error, createWallet, clearError } = useWalletStore();
+  const { publicKey, loading, error, createWallet, clearWalletError } = useWalletStore();
 
   // Success state — wallet was just created (publicKey is now populated).
   if (publicKey) {
@@ -151,7 +152,7 @@ export default function WalletSetup() {
           <p className="text-sm text-red-300 flex-1">{error}</p>
           <button
             type="button"
-            onClick={clearError}
+            onClick={clearWalletError}
             aria-label="Dismiss error"
             className="text-red-400 hover:text-red-200 flex-shrink-0"
           >
