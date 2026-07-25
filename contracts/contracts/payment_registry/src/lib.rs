@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map, String};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
 
 pub const VERSION: u32 = 1;
 
@@ -8,7 +8,7 @@ pub const VERSION: u32 = 1;
 #[derive(Clone)]
 pub enum DataKey {
     Admin,
-    Payments,
+    Payment(String),
 }
 
 #[contracttype]
@@ -32,9 +32,6 @@ impl Contract {
 
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage()
-            .instance()
-            .set(&DataKey::Payments, &Map::<String, PaymentRecord>::new(&env));
     }
 
     /// Register a remittance payment on-chain for verification.
@@ -61,33 +58,26 @@ impl Contract {
             panic!("amount must be positive");
         }
 
-        let mut payments: Map<String, PaymentRecord> = env
-            .storage()
-            .instance()
-            .get(&DataKey::Payments)
-            .unwrap_or_else(|| Map::new(&env));
+        let key = DataKey::Payment(payment_id.clone());
 
-        if payments.contains_key(payment_id.clone()) {
+        if env.storage().persistent().has(&key) {
             return false;
         }
 
-        payments.set(
-            payment_id,
-            PaymentRecord {
-                amount,
-                recipient,
-                registered: true,
-            },
-        );
+        let record = PaymentRecord {
+            amount,
+            recipient,
+            registered: true,
+        };
 
-        env.storage().instance().set(&DataKey::Payments, &payments);
+        env.storage().persistent().set(&key, &record);
         true
     }
 
     /// Return the stored payment record, if present.
     pub fn get_payment(env: Env, payment_id: String) -> Option<PaymentRecord> {
-        let payments: Map<String, PaymentRecord> = env.storage().instance().get(&DataKey::Payments)?;
-        payments.get(payment_id)
+        let key = DataKey::Payment(payment_id);
+        env.storage().persistent().get(&key)
     }
 
     /// Check whether a payment id has been registered.

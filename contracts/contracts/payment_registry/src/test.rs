@@ -63,3 +63,40 @@ fn rejects_non_positive_amount() {
         &recipient,
     );
 }
+
+#[test]
+fn stress_test_10000_payments() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin);
+
+    // Register 10,000 payments
+    for i in 0..10000 {
+        let payment_id = String::from_str(&env, &format!("payment-{}", i));
+        let registered = client.register_payment(&admin, &payment_id, &(100_000 + i), &recipient);
+        assert!(registered, "failed to register payment {}", i);
+
+        if i % 1000 == 0 && i > 0 {
+            // Periodically verify that earlier payments are still readable
+            let earlier_id = String::from_str(&env, &format!("payment-{}", i - 500));
+            let record = client.get_payment(&earlier_id).expect("earlier payment not found");
+            assert_eq!(record.amount, 100_000 + (i - 500));
+        }
+    }
+
+    // Verify all payments are readable
+    for i in 0..10000 {
+        let payment_id = String::from_str(&env, &format!("payment-{}", i));
+        let record = client.get_payment(&payment_id).expect(&format!("payment {} not found", i));
+        assert_eq!(record.amount, 100_000 + i);
+        assert_eq!(record.recipient, recipient);
+        assert!(record.registered);
+        assert!(client.is_registered(&payment_id));
+    }
+}
