@@ -300,7 +300,7 @@ export class TransactionService {
     };
 
     if (flagged && (tx.status === 'PENDING' || tx.status === 'RETRYING')) {
-      data.status = 'REVIEW';
+      data.status = 'PENDING_REVIEW';
     }
 
     return this.prisma.transaction.update({
@@ -311,7 +311,7 @@ export class TransactionService {
 
   async updateTransactionStatus(
     txId: string,
-    status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED' | 'REVIEW',
+    status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED' | 'PENDING_REVIEW',
     stellarTxHash?: string,
   ) {
     const updated = await this.prisma.transaction.update({
