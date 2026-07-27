@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useWalletStore } from '../store/walletStore';
 import { useBalances, useTransactions } from '../hooks/useWalletData';
 import { withAuth } from '../lib/withAuth';
@@ -6,11 +6,16 @@ import BalanceCard from '../components/BalanceCard';
 import SendForm from '../components/SendForm';
 import TransactionList from '../components/TransactionList';
 import SkeletonCard from '../components/SkeletonCard';
+import DepositModal from '../components/DepositModal';
+import WithdrawModal from '../components/WithdrawModal';
+
+type ActiveModal = 'deposit' | 'withdraw' | null;
 
 function Dashboard() {
-  const { setPublicKey } = useWalletStore();
+  const { publicKey, setPublicKey } = useWalletStore();
   const { data: balances = [], isLoading: isLoadingBalances, error: balancesError } = useBalances();
   const { data: transactions = [], isLoading: isLoadingTransactions, error: transactionsError } = useTransactions();
+  const [activeModal, setActiveModal] = useState<ActiveModal>(null);
 
   useEffect(() => {
     const pk = localStorage.getItem('publicKey');
@@ -18,6 +23,8 @@ function Dashboard() {
       setPublicKey(pk);
     }
   }, [setPublicKey]);
+
+  const closeModal = () => setActiveModal(null);
 
   return (
     <main id="main-content" tabIndex={-1} className="p-4 max-w-3xl mx-auto">
@@ -37,6 +44,7 @@ function Dashboard() {
         </div>
       )}
 
+      {/* Balances */}
       <section className="mb-6" aria-labelledby="balances-heading">
         <h2 id="balances-heading" className="text-lg font-semibold mb-2">Balances</h2>
         {isLoadingBalances ? (
@@ -54,6 +62,47 @@ function Dashboard() {
         )}
       </section>
 
+      {/* Deposit & Withdraw */}
+      {publicKey && (
+        <section className="mb-6" aria-labelledby="fiat-ramp-heading">
+          <h2 id="fiat-ramp-heading" className="text-lg font-semibold mb-3 text-gray-900 dark:text-white">
+            Fiat On/Off-Ramp
+          </h2>
+          <div className="grid grid-cols-2 gap-3">
+            {/* Deposit */}
+            <button
+              onClick={() => setActiveModal('deposit')}
+              className="flex items-center justify-center gap-2 bg-gray-900 border border-gray-800 hover:border-emerald-600/50 hover:bg-emerald-500/5 active:scale-[0.99] transition-all rounded-xl p-4 text-sm font-semibold text-gray-200 hover:text-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-sm group"
+              aria-label="Deposit funds via anchor"
+            >
+              {/* Arrow-down into circle icon */}
+              <span className="flex items-center justify-center w-8 h-8 rounded-full bg-emerald-500/10 group-hover:bg-emerald-500/20 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16" />
+                </svg>
+              </span>
+              Deposit
+            </button>
+
+            {/* Withdraw */}
+            <button
+              onClick={() => setActiveModal('withdraw')}
+              className="flex items-center justify-center gap-2 bg-gray-900 border border-gray-800 hover:border-violet-600/50 hover:bg-violet-500/5 active:scale-[0.99] transition-all rounded-xl p-4 text-sm font-semibold text-gray-200 hover:text-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-500 shadow-sm group"
+              aria-label="Withdraw funds via anchor"
+            >
+              {/* Arrow-up out of circle icon */}
+              <span className="flex items-center justify-center w-8 h-8 rounded-full bg-violet-500/10 group-hover:bg-violet-500/20 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-violet-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 20V8m0 0l-4 4m4-4l4 4M4 4h16" />
+                </svg>
+              </span>
+              Withdraw
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* Send Money */}
       <section className="mb-6" aria-labelledby="send-money-heading">
         <h2 id="send-money-heading" className="text-lg font-semibold mb-2 text-gray-900 dark:text-white">
           Send Money
@@ -61,10 +110,19 @@ function Dashboard() {
         <SendForm />
       </section>
 
+      {/* Transaction History */}
       <section aria-labelledby="transactions-heading">
         <h2 id="transactions-heading" className="text-lg font-semibold mb-2">Transaction History</h2>
         <TransactionList transactions={transactions} isLoading={isLoadingTransactions} />
       </section>
+
+      {/* Modals — rendered in a portal-like pattern at end of tree */}
+      {activeModal === 'deposit' && publicKey && (
+        <DepositModal publicKey={publicKey} onClose={closeModal} />
+      )}
+      {activeModal === 'withdraw' && publicKey && (
+        <WithdrawModal publicKey={publicKey} onClose={closeModal} />
+      )}
     </main>
   );
 }
