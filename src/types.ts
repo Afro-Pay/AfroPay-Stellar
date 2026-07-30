@@ -1,86 +1,101 @@
-export type Currency = 'XLM' | 'USDC' | 'NGN' | 'EUR';
+export type CurrencyCode = 'XLM' | 'USDC' | 'NGN' | 'EUR';
 
-export interface WalletBalance {
-  currency: Currency;
-  code: string;
-  amount: number;
-  assetIssuer?: string;
-  usdEquivalent: number;
-  trustlineEstablished: boolean;
+export interface AssetBalance {
+  code: CurrencyCode;
+  name: string;
+  symbol: string;
+  balance: number;
+  usdValue: number;
+  trustlineActive: boolean;
+  issuer?: string;
+  flag: string;
 }
 
-export interface UserWallet {
+export interface WalletState {
   publicKey: string;
   secretKeyEncrypted: string;
-  network: 'testnet' | 'public';
-  balances: WalletBalance[];
   sequenceNumber: string;
-  subentryCount: number;
+  isFunded: boolean;
+  balances: Record<CurrencyCode, AssetBalance>;
+  createdAt: string;
 }
 
-export type TransactionStatus = 'PENDING' | 'QUEUED' | 'RETRYING' | 'SUCCESS' | 'FAILED';
+export interface TransferQuote {
+  fromCurrency: CurrencyCode;
+  fromAmount: number;
+  toCurrency: CurrencyCode;
+  estimatedToAmount: number;
+  fxRate: number;
+  inverseFxRate: number;
+  pathRoute: string[];
+  stellarFeeXLM: number;
+  anchorFeeUSD: number;
+  totalFeeUSD: number;
+  estimatedDurationSeconds: number;
+  expiresAt: number;
+  corridor: string;
+}
+
+export interface RecipientInfo {
+  name: string;
+  email?: string;
+  country: string;
+  countryFlag: string;
+  payoutMethod: 'bank_account' | 'mobile_money' | 'stellar_address';
+  bankName?: string;
+  accountNumber?: string;
+  mobileProvider?: string;
+  stellarAddress?: string;
+}
+
+export type TransactionType = 'transfer' | 'deposit' | 'withdrawal' | 'anchor_sep24';
+export type TransactionStatus = 'pending' | 'settling' | 'settled' | 'failed' | 'flagged';
 
 export interface TransactionRecord {
   id: string;
-  txHash?: string;
-  type: 'TRANSFER' | 'DEPOSIT' | 'WITHDRAWAL' | 'TRUSTLINE';
-  senderPublicKey: string;
-  recipientPublicKey: string;
-  recipientName: string;
-  sendAmount: number;
-  sendCurrency: Currency;
-  receiveAmount: number;
-  receiveCurrency: Currency;
-  exchangeRate: number;
-  feeUsd: number;
-  stellarFeeXlm: number;
+  type: TransactionType;
+  sourceCurrency: CurrencyCode;
+  sourceAmount: number;
+  destCurrency: CurrencyCode;
+  destAmount: number;
+  fxRate: number;
+  feeUSD: number;
+  recipient: RecipientInfo;
   status: TransactionStatus;
+  stellarTxHash?: string;
+  anchorName?: string;
   createdAt: string;
+  completedAt?: string;
+  riskScore: number; // 0-100
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
   memo?: string;
-  riskScore: number;
-  flagged: boolean;
-  pathUsed?: string[];
-  callbackUrl?: string;
-  callbackStatus?: 'PENDING' | 'DELIVERED' | 'FAILED';
 }
 
-export interface FXQuote {
-  sourceCurrency: Currency;
-  destinationCurrency: Currency;
+export interface FXRateInfo {
+  from: CurrencyCode;
+  to: CurrencyCode;
   rate: number;
-  estimatedFeeUsd: number;
-  pathPaymentRequired: boolean;
-  intermediatePaths: string[];
-  expiresAt: number;
+  change24h: number;
+  updatedAt: string;
 }
 
 export interface KYCTierInfo {
-  tier: 'Tier 0' | 'Tier 1' | 'Tier 2' | 'Tier 3';
-  dailyLimitUsd: number;
-  monthlyLimitUsd: number;
-  status: 'VERIFIED' | 'PENDING' | 'ACTION_REQUIRED';
-  requirementsMet: string[];
-  pendingRequirements: string[];
+  tier: 1 | 2 | 3;
+  title: string;
+  dailyLimitUSD: number;
+  monthlyLimitUSD: number;
+  requirements: string[];
+  status: 'verified' | 'pending' | 'unverified';
 }
 
-export interface AnchorProvider {
+export interface AnchorPartner {
   id: string;
   name: string;
-  assetCode: Currency;
-  domain: string;
-  sepVersions: string[];
-  supportedBanks: string[];
-  minAmountUsd: number;
-  maxAmountUsd: number;
+  country: string;
+  flag: string;
+  supportedCurrencies: CurrencyCode[];
   feePercentage: number;
-}
-
-export interface SSELogEvent {
-  id: string;
-  timestamp: string;
-  txId: string;
-  step: string;
-  status: TransactionStatus;
-  message: string;
-  stellarHash?: string;
+  avgProcessTime: string;
+  logoUrl?: string;
+  status: 'online' | 'degraded';
 }
