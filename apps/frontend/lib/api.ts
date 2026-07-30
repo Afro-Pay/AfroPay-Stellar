@@ -78,4 +78,73 @@ api.interceptors.response.use(
   },
 );
 
+// ---------------------------------------------------------------------------
+// Anchor (SEP-6) helpers
+// ---------------------------------------------------------------------------
+
+/** SEP-6 deposit response from GET /anchor/deposit */
+export interface DepositInfo {
+  how?: string;
+  id?: string;
+  eta?: number;
+  min_amount?: number;
+  max_amount?: number;
+  fee_fixed?: number;
+  fee_percent?: number;
+  extra_info?: Record<string, unknown>;
+  instructions?: Record<string, unknown>;
+  stellar_account?: string;
+  account?: string;
+  account_id?: string;
+  /** Present on non_interactive_customer_info_needed variant */
+  type?: string;
+  fields?: Record<string, unknown>;
+}
+
+/** SEP-6 withdraw response from GET /anchor/withdraw */
+export interface WithdrawInfo {
+  id?: string;
+  eta?: number;
+  min_amount?: number;
+  max_amount?: number;
+  fee_fixed?: number;
+  fee_percent?: number;
+  extra_info?: Record<string, unknown>;
+  account_id?: string;
+  memo?: string;
+  memo_type?: string;
+  /** Present on non_interactive_customer_info_needed variant */
+  type?: string;
+  fields?: Record<string, unknown>;
+}
+
+/**
+ * GET /anchor/deposit?assetCode=USDC&account=G...
+ * JWT is attached automatically by the axios interceptor.
+ */
+export async function getDepositInfo(
+  assetCode: string,
+  account: string,
+): Promise<DepositInfo> {
+  const { data } = await api.get<DepositInfo>('/anchor/deposit', {
+    params: { assetCode, account },
+  });
+  return data;
+}
+
+/**
+ * GET /anchor/withdraw?assetCode=USDC&account=G...&amount=100
+ * JWT is attached automatically by the axios interceptor.
+ */
+export async function getWithdrawInfo(
+  assetCode: string,
+  account: string,
+  amount: string,
+): Promise<WithdrawInfo> {
+  const { data } = await api.get<WithdrawInfo>('/anchor/withdraw', {
+    params: { assetCode, account, amount },
+  });
+  return data;
+}
+
 export default api;
