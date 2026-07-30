@@ -13,7 +13,9 @@ enum TransactionStatus {
   RETRYING
   SUCCESS
   FAILED
-  REVIEW
+  /// Transaction passed the fraud check but scored in the medium-risk band
+  /// (0.5 ≤ riskScore < 0.8) and is held for manual review before submission.
+  PENDING_REVIEW
 }
 
 /// Allowed lifecycle states for KYC records.
