@@ -28,6 +28,11 @@ All existing test files are present and properly structured:
 ### Wallet Tests ✅
 - `apps/api/src/wallet/wallet.service.spec.ts` - Wallet service tests
 
+### Adversarial Security Tests
+- `apps/api/test/adversarial/auth-bypass.spec.ts` - Six red-team scenarios covering JWT algorithm confusion, missing and malformed authentication on KYC-protected routes, forwarded-IP rate-limit spoofing, transaction amount tampering, and cross-user wallet UUID access
+- Run independently with `npm run test:adversarial` from `apps/api`
+- Self-contained HTTP harness; no database, Redis, Stellar, or other external service is required
+
 ## Test Infrastructure
 
 **Test Runner**: Jest (configured in package.json)

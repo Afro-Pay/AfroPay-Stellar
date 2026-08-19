@@ -4,11 +4,11 @@ import { WalletController } from './wallet.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { VaultService } from '../vault/vault.service';
-import { ConfigModule } from '@nestjs/config';
+import { WalletOwnershipGuard } from './wallet-ownership.guard';
 
 @Module({
-  imports: [PrismaModule, AuthModule, ConfigModule],
-  providers: [WalletService, VaultService],
+  imports: [PrismaModule, AuthModule],
+  providers: [WalletService, VaultService, WalletOwnershipGuard],
   controllers: [WalletController],
   exports: [WalletService],
 })

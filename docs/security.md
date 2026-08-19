@@ -1,5 +1,7 @@
 # Security Design for Wallet Key Encryption
 
+**See also:** [Threat Model (STRIDE)](./threat-model.md) — Formal threat analysis of all three system surfaces (remittance flow, key storage, anchor integration).
+
 ## Goal
 Private wallet secret keys must be protected at rest using per-wallet envelope encryption to avoid a single master key compromise exposing all wallets.
 
