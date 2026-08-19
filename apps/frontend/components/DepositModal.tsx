@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { getDepositInfo, DepositInfo } from '../lib/api';
 
 const SUPPORTED_ASSETS = ['USDC', 'NGN'] as const;
@@ -17,10 +17,52 @@ type ModalState = 'idle' | 'loading' | 'success' | 'error';
  * Follows the same Tailwind dark-mode patterns as SendForm.tsx.
  */
 export default function DepositModal({ publicKey, onClose }: DepositModalProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const [assetCode, setAssetCode] = useState<SupportedAsset>('USDC');
   const [state, setState] = useState<ModalState>('idle');
   const [depositInfo, setDepositInfo] = useState<DepositInfo | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
+    const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(
+      'button:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    );
+    firstFocusable?.focus();
+
+    return () => previouslyFocusedRef.current?.focus();
+  }, []);
+
+  const requestClose = () => {
+    onClose();
+    previouslyFocusedRef.current?.focus();
+  };
+
+  const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      requestClose();
+      return;
+    }
+
+    if (event.key !== 'Tab') return;
+
+    const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    ) ?? []);
+    if (!focusable.length) return;
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   const handleFetch = async () => {
     setState('loading');
@@ -50,11 +92,13 @@ export default function DepositModal({ publicKey, onClose }: DepositModalProps) 
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="deposit-modal-title"
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={(e) => { if (e.target === e.currentTarget) requestClose(); }}
+      onKeyDown={handleDialogKeyDown}
     >
       <div className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl space-y-5 p-6">
 
@@ -64,7 +108,7 @@ export default function DepositModal({ publicKey, onClose }: DepositModalProps) 
             Deposit Funds
           </h2>
           <button
-            onClick={onClose}
+            onClick={requestClose}
             aria-label="Close deposit modal"
             className="text-gray-400 hover:text-white transition-colors p-1 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
@@ -184,7 +228,7 @@ export default function DepositModal({ publicKey, onClose }: DepositModalProps) 
             </button>
           )}
           <button
-            onClick={onClose}
+            onClick={requestClose}
             className="bg-gray-800 hover:bg-gray-700 active:scale-[0.99] transition-all text-gray-400 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-gray-500 border border-gray-700"
           >
             Close
