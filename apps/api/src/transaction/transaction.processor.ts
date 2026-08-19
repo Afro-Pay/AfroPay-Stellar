@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { Logger } from 'nestjs-pino';
 import { FraudService } from './fraud.service';
+import { assertTransactionAmountIntegrity } from './transaction-integrity';
 
 /** riskScore >= this threshold → reject outright (FAILED). */
 const FRAUD_BLOCK_THRESHOLD = 0.8;
@@ -41,6 +42,10 @@ export class TransactionProcessor {
         memo,
       },
     });
+
+    // Fail closed if the stored value differs from the amount that passed the
+    // request/simulation checks. Never score or submit a mutated transaction.
+    assertTransactionAmountIntegrity(amount, transaction.amount);
 
     // Audit: Transaction initiated
     await this.auditService.log(userId, 'TRANSACTION_INITIATE', {
