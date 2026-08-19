@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { WalletService } from '../wallet/wallet.service';
 import { AnchorService } from './anchor.service';
 import { StellarAddressPipe } from '../common/pipes/stellar-address.pipe';
+import { RateLimit } from '../rate-limit/rate-limit.decorator';
 
 @ApiTags('anchor')
 @Controller('anchor')
@@ -87,6 +88,13 @@ export class AnchorController {
   }
 
   @Get('fx-rate')
+  @RateLimit({
+    keyPrefix: 'anchor:fx-rate',
+    limit: 10,
+    windowMs: 60_000,
+    limitEnv: 'ANCHOR_FX_RATE_LIMIT_MAX',
+    windowMsEnv: 'ANCHOR_FX_RATE_LIMIT_WINDOW_MS',
+  })
   @ApiOperation({ summary: 'Get exchange rate from anchor' })
   @ApiQuery({
     name: 'account',

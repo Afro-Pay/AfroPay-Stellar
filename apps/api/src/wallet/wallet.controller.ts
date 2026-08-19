@@ -2,6 +2,7 @@ import { Controller, Post, Get, Param, Query, UseGuards, Request, BadRequestExce
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { WalletService } from './wallet.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RateLimit } from '../rate-limit/rate-limit.decorator';
 
 @ApiTags('wallet')
 @Controller('wallet')
@@ -34,6 +35,13 @@ export class WalletController {
   }
 
   @Get('balances')
+  @RateLimit({
+    keyPrefix: 'wallet:balances',
+    limit: 10,
+    windowMs: 60_000,
+    limitEnv: 'WALLET_BALANCE_RATE_LIMIT_MAX',
+    windowMsEnv: 'WALLET_BALANCE_RATE_LIMIT_WINDOW_MS',
+  })
   @ApiOperation({ summary: 'Get wallet balances' })
   @ApiQuery({ name: 'afterTxHash', required: false, type: String })
   @ApiResponse({ status: 200, description: 'Returns wallet balances' })

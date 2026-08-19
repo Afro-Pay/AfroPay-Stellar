@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { StellarAddressPipe } from '../common/pipes/stellar-address.pipe';
 import { WalletService } from '../wallet/wallet.service';
+import { RateLimit } from '../rate-limit/rate-limit.decorator';
 
 @ApiTags('anchor-auth')
 @Controller('anchor/auth')
@@ -12,6 +13,13 @@ export class AnchorAuthController {
   ) {}
 
   @Get('challenge')
+  @RateLimit({
+    keyPrefix: 'anchor:auth',
+    limit: 10,
+    windowMs: 60_000,
+    limitEnv: 'ANCHOR_AUTH_RATE_LIMIT_MAX',
+    windowMsEnv: 'ANCHOR_AUTH_RATE_LIMIT_WINDOW_MS',
+  })
   @ApiOperation({ summary: 'Get SEP-10 challenge for wallet verification' })
   @ApiResponse({
     status: 200,
@@ -39,6 +47,13 @@ export class AnchorAuthController {
   }
 
   @Post('token')
+  @RateLimit({
+    keyPrefix: 'anchor:auth',
+    limit: 10,
+    windowMs: 60_000,
+    limitEnv: 'ANCHOR_AUTH_RATE_LIMIT_MAX',
+    windowMsEnv: 'ANCHOR_AUTH_RATE_LIMIT_WINDOW_MS',
+  })
   @ApiOperation({ summary: 'Exchange challenge for token (SEP-10)' })
   @ApiResponse({
     status: 200,

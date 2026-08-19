@@ -18,6 +18,12 @@ All environment variables used across AfroPay-Stellar services, their defaults, 
 | `STELLAR_HORIZON_URL` | Stellar Horizon API endpoint | `https://horizon-testnet.stellar.org` | No | No |
 | `ANCHOR_USDC_URL` | SEP-6 anchor URL for USDC deposits/withdrawals | `https://testanchor.stellar.org` | No | No |
 | `ANCHOR_NGN_URL` | SEP-6 anchor URL for NGN deposits/withdrawals | `https://testanchor.stellar.org` | No | No |
+| `WALLET_BALANCE_RATE_LIMIT_MAX` | Maximum balance-fetch requests allowed per authenticated user and window | `10` | No | No |
+| `WALLET_BALANCE_RATE_LIMIT_WINDOW_MS` | Balance-fetch rate-limit window in milliseconds | `60000` | No | No |
+| `ANCHOR_FX_RATE_LIMIT_MAX` | Maximum FX-rate requests allowed per authenticated user and window | `10` | No | No |
+| `ANCHOR_FX_RATE_LIMIT_WINDOW_MS` | FX-rate request limit window in milliseconds | `60000` | No | No |
+| `ANCHOR_AUTH_RATE_LIMIT_MAX` | Maximum combined challenge/token requests allowed per client IP and window | `10` | No | No |
+| `ANCHOR_AUTH_RATE_LIMIT_WINDOW_MS` | Anchor authentication rate-limit window in milliseconds | `60000` | No | No |
 
 ## Frontend (`apps/frontend/`)
 

@@ -1,9 +1,14 @@
 class MockRedis {
   private static store = new Map<string, { count: number; expiresAt: number }>();
   
-  constructor(url: string, options: any) {}
+  constructor(url: string, options: any) {
+    void url;
+    void options;
+  }
 
   disconnect() {}
+
+  async quit() {}
 
   async eval(script: string, numKeys: number, key: string, limit: any, windowMs: any, nowMs: any) {
     const limitVal = Number(limit);
@@ -41,6 +46,8 @@ class MockRedis {
 
 import { ExecutionContext, HttpException } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { RedisRateLimiter } from "./redis-rate-limiter";
 import { RateLimitGuardRedis } from "./rate-limit.guard.redis";
 import { RateLimitOptions } from "./rate-limit.decorator";
@@ -92,6 +99,8 @@ describe("RateLimitGuardRedis", () => {
   afterEach(async () => {
     // Clean per-test keys for stability.
     await limiter.resetAllForPrefix("auth:login");
+    await limiter.resetAllForPrefix("wallet:balances");
+    await limiter.resetAllForPrefix("anchor:auth");
   });
 
   afterAll(async () => {
@@ -145,5 +154,71 @@ describe("RateLimitGuardRedis", () => {
     expect(res3.headers.get("X-RateLimit-Remaining")).toBe("0");
     expect(res3.headers.get("X-RateLimit-Reset")).toBeDefined();
     expect(res3.headers.get("Retry-After")).toBeDefined();
+  });
+
+  it("uses an environment-configured per-user bucket for authenticated endpoints", async () => {
+    process.env.WALLET_BALANCE_RATE_LIMIT_MAX = "1";
+    process.env.WALLET_BALANCE_RATE_LIMIT_WINDOW_MS = "60000";
+    const guard = guardFor({
+      keyPrefix: "wallet:balances",
+      limit: 10,
+      windowMs: 60_000,
+      limitEnv: "WALLET_BALANCE_RATE_LIMIT_MAX",
+      windowMsEnv: "WALLET_BALANCE_RATE_LIMIT_WINDOW_MS",
+    }, limiter);
+
+    const firstUser = { user: { userId: "user-1" }, ip: "203.0.113.1", headers: {} };
+    const sameUserDifferentIp = { user: { userId: "user-1" }, ip: "203.0.113.2", headers: {} };
+    const secondUser = { user: { userId: "user-2" }, ip: "203.0.113.1", headers: {} };
+
+    await expect(guard.canActivate(contextFor(firstUser, responseMock()))).resolves.toBe(true);
+    const blockedResponse = responseMock();
+    await expect(guard.canActivate(contextFor(sameUserDifferentIp, blockedResponse))).rejects.toMatchObject({
+      status: 429,
+    });
+    expect(blockedResponse.headers.get("Retry-After")).toBeDefined();
+    await expect(guard.canActivate(contextFor(secondUser, responseMock()))).resolves.toBe(true);
+  });
+
+  it("uses the first forwarded IP for unauthenticated endpoint buckets", async () => {
+    const guard = guardFor({
+      keyPrefix: "anchor:auth",
+      limit: 1,
+      windowMs: 60_000,
+    }, limiter);
+
+    const firstRequest = { headers: { "x-forwarded-for": "198.51.100.8, 10.0.0.1" } };
+    const sameClient = { headers: { "x-forwarded-for": "198.51.100.8, 10.0.0.2" } };
+    const differentClient = { headers: { "x-forwarded-for": "198.51.100.9" } };
+
+    await expect(guard.canActivate(contextFor(firstRequest, responseMock()))).resolves.toBe(true);
+    await expect(guard.canActivate(contextFor(sameClient, responseMock()))).rejects.toMatchObject({
+      status: 429,
+    });
+    await expect(guard.canActivate(contextFor(differentClient, responseMock()))).resolves.toBe(true);
+  });
+
+  it("wires configurable policies to every Horizon-facing endpoint", () => {
+    const walletController = readFileSync(
+      join(__dirname, "../wallet/wallet.controller.ts"),
+      "utf8",
+    );
+    const anchorController = readFileSync(
+      join(__dirname, "../anchor/anchor.controller.ts"),
+      "utf8",
+    );
+    const anchorAuthController = readFileSync(
+      join(__dirname, "../anchor/auth.controller.ts"),
+      "utf8",
+    );
+    const appModule = readFileSync(join(__dirname, "../app.module.ts"), "utf8");
+
+    expect(walletController).toContain("WALLET_BALANCE_RATE_LIMIT_MAX");
+    expect(walletController).toContain("WALLET_BALANCE_RATE_LIMIT_WINDOW_MS");
+    expect(anchorController).toContain("ANCHOR_FX_RATE_LIMIT_MAX");
+    expect(anchorController).toContain("ANCHOR_FX_RATE_LIMIT_WINDOW_MS");
+    expect(anchorAuthController).toContain("ANCHOR_AUTH_RATE_LIMIT_MAX");
+    expect(anchorAuthController).toContain("ANCHOR_AUTH_RATE_LIMIT_WINDOW_MS");
+    expect(appModule).toContain("RateLimitModule");
   });
 });
