@@ -36,6 +36,9 @@ Options:
   --source <account>          Source/signing account alias (default: afropay_deployer)
   --fund                      Fund the source account via friendbot (testnet/local)
   --skip-build                Skip wasm build step
+  --upgrade                   Upgrade an existing payment registry and migrate one ID
+  --contract-id <id>          Existing contract id used with --upgrade
+  --payment-id <id>           Legacy payment ID used with --upgrade
   -h, --help                  Show this help message
 EOF
 }
@@ -149,7 +152,7 @@ validate_deployed_contract() {
     -- \
     version)"
 
-  if [[ "$version" != "1" ]]; then
+  if [[ "$version" != "2" ]]; then
     echo "error: unexpected contract version '$version'"
     exit 1
   fi
