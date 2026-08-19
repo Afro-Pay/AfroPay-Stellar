@@ -1,5 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsInt, Min, Max } from 'class-validator';
+import {
+  IsDateString,
+  IsEnum,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from '../transaction.service';
 
@@ -148,4 +157,42 @@ export class PaginatedHistoryDto {
     example: 120,
   })
   total: number;
+}
+
+export class GetTransactionsQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(HISTORY_MAX_LIMIT)
+  limit = HISTORY_DEFAULT_LIMIT;
+
+  @IsOptional()
+  @IsEnum(['PENDING', 'RETRYING', 'SUCCESS', 'FAILED', 'PENDING_REVIEW'])
+  status?: string;
+
+  @IsOptional()
+  @IsString()
+  assetCode?: string;
+
+  @IsOptional()
+  @IsDateString()
+  from?: string;
+
+  @IsOptional()
+  @IsDateString()
+  to?: string;
+}
+
+export class PaginatedTransactionsDto {
+  data: TransactionResponseDto[];
+  total: number;
+  page: number;
+  limit: number;
 }
