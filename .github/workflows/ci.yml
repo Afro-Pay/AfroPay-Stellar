@@ -34,6 +34,16 @@ jobs:
       - name: Generate Prisma Client
         run: npm run prisma:generate
 
+      - name: Verify DEK material is never logged
+        working-directory: .
+        run: |
+          if grep -RniE --include='*.ts' --include='*.rs' \
+            '(logger|console|print|tracing).*(encryptedDek|plaintextDek|data.?encryption.?key|\bdek\b)|(encryptedDek|plaintextDek|data.?encryption.?key|\bdek\b).*(logger|console|print|tracing)' \
+            apps/api/src services/rust-worker/src; then
+            echo "DEK-related log statement detected"
+            exit 1
+          fi
+
       - name: Run linting
         run: npm run lint
 

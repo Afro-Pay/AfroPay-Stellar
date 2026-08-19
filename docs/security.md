@@ -29,3 +29,41 @@ Private wallet secret keys must be protected at rest using per-wallet envelope e
 - The API validates that either `KMS_KEY_ID` or `ENCRYPTION_KEY` is present.
 - If only KMS is configured, `ENCRYPTION_KEY` is not required.
 - Legacy AES-encrypted wallets still work and are migrated when decrypted.
+
+## Delegated signing trust boundary
+
+Transaction signing is delegated through the external signer contract in
+[delegated-signing-design.md](delegated-signing-design.md). NestJS may read a
+wallet ID and public key, but must not select or receive `encryptedSecret`,
+`encryptedDek`, plaintext key material, or secret seeds during signing.
+
+### Assets
+
+- Wallet seed and plaintext DEK: critical confidentiality assets.
+- Unsigned transaction XDR: integrity-critical; disclosure is lower impact.
+- Signed transaction XDR: integrity-critical and replay-sensitive.
+- Signer workload identity and authorization token: privileged credentials.
+
+### Threat actors and attacks
+
+- API pod compromise, heap snapshot, core dump, or debug endpoint access.
+- Forged or replayed API-to-signer requests.
+- Queue or service-network tampering that changes transaction fields.
+- Signer/worker compromise and KMS or Vault policy escalation.
+- A malicious signer returning a signature from the wrong wallet or network.
+
+### Controls
+
+- The API queries only wallet ID/public key and validates signer identity.
+- Signing fails closed; there is no local-decryption fallback.
+- Production transport requires workload identity plus mTLS.
+- The signer revalidates canonical transaction fields and request freshness.
+- Logs contain opaque request/wallet IDs and outcomes only.
+- CI rejects DEK-related logger, console, tracing, and print statements.
+
+### Residual risk
+
+Vault Transit removes plaintext key material from application processes, but a
+compromised authorized API can still request signatures within policy. Rust
+worker delegation protects NestJS memory but leaves short-lived plaintext keys
+in worker memory. The design comparison lists compensating controls.
