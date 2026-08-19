@@ -13,10 +13,7 @@ import { WalletModule } from '../wallet/wallet.module';
 import { AuthModule } from '../auth/auth.module';
 import { KycModule } from '../kyc/kyc.module';
 import { AnchorModule } from '../anchor/anchor.module';
-import {
-  TRANSACTION_DLQ_QUEUE_NAME,
-  TRANSACTION_QUEUE_NAME,
-} from './transaction-retry.config';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -29,6 +26,7 @@ import {
     AuthModule,
     KycModule,
     AnchorModule,
+    AuditModule,
   ],
   providers: [
     TransactionService,
