@@ -4,13 +4,16 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, token, Address, Env, U256,
 };
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
+pub const STORAGE_VERSION: u32 = 2;
 
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     EscrowCounter,
     Escrow(U256),
+    Admin,
+    StorageVersion,
 }
 
 #[contracttype]
@@ -31,6 +34,44 @@ pub struct Contract;
 
 #[contractimpl]
 impl Contract {
+    pub fn initialize(env: Env, admin: Address) {
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("contract already initialized");
+        }
+
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::StorageVersion, &STORAGE_VERSION);
+    }
+
+    pub fn migrate(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("contract not initialized");
+        if admin != stored_admin {
+            panic!("unauthorized admin");
+        }
+
+        let current_version: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::StorageVersion)
+            .unwrap_or(1);
+        if current_version > STORAGE_VERSION {
+            panic!("storage version is newer than this contract");
+        }
+        if current_version < STORAGE_VERSION {
+            env.storage()
+                .instance()
+                .set(&DataKey::StorageVersion, &STORAGE_VERSION);
+        }
+    }
+
     /// Deposit funds into escrow.
     /// 
     /// # Arguments
