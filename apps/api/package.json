@@ -6,6 +6,7 @@
     "start": "node dist/main",
     "build": "nest build",
     "test": "jest --passWithNoTests",
+    "test:adversarial": "jest --runInBand test/adversarial",
     "test:e2e": "jest --config jest.e2e.json --runInBand --forceExit",
     "prisma:migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
