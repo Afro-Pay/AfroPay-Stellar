@@ -108,6 +108,9 @@ model KycRecord {
   status          KycStatus     @default(PENDING)
   tier            KycTier       @default(NONE)
   documentType    String?
+  /// SHA-256 hex digest of the uploaded document, prefixed with the S3 object
+  /// key: "<s3-key>:<sha256-hex>". Set by POST /kyc/confirm-upload after hash
+  /// verification. Null until the upload is confirmed.
   documentRef     String?
   submittedAt     DateTime?
   reviewedAt      DateTime?
