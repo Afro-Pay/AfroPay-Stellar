@@ -2,7 +2,7 @@ import { Controller, Post, Get, Param, Query, UseGuards, Request, BadRequestExce
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { WalletService } from './wallet.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RateLimit } from '../rate-limit/rate-limit.decorator';
+import { WalletOwnershipGuard } from './wallet-ownership.guard';
 
 @ApiTags('wallet')
 @Controller('wallet')
@@ -12,6 +12,7 @@ export class WalletController {
   constructor(private readonly walletService: WalletService) {}
 
   @Post(':id/enable-multisig')
+  @UseGuards(WalletOwnershipGuard)
   @ApiOperation({ summary: 'Enable multi-signature on wallet' })
   @ApiResponse({
     status: 200,
