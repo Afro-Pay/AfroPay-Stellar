@@ -4,7 +4,7 @@ import { JobOptions, Queue } from 'bull';
 import Redis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { KycService } from '../kyc/kyc.service';
-import { TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
+import { TRANSACTION_QUEUE_NAME, TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
 
 export const HISTORY_MAX_LIMIT = 100;
 export const HISTORY_DEFAULT_LIMIT = 25;
@@ -83,7 +83,7 @@ export class TransactionService {
   private idempotencyCache: any;
 
   constructor(
-    @InjectQueue('transactions') private txQueue: Queue,
+    @InjectQueue(TRANSACTION_QUEUE_NAME) private txQueue: Queue,
     private prisma: PrismaService,
     private kycService: KycService,
   ) {
