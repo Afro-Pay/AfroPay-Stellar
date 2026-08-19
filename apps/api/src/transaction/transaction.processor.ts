@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { Process, Processor } from '@nestjs/bull';
+import { Job } from 'bull';
+import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { Logger } from 'nestjs-pino';
 import { FraudService } from './fraud.service';
@@ -11,38 +13,86 @@ const FRAUD_BLOCK_THRESHOLD = 0.8;
 /** riskScore >= this threshold → hold for manual review (PENDING_REVIEW). */
 const FRAUD_REVIEW_THRESHOLD = 0.5;
 
+/**
+ * Shape of data placed on the 'transactions' queue by TransactionService.
+ * The transaction record already exists in the DB when this job runs;
+ * the processor loads it by txId rather than creating a second record.
+ */
+export interface TransactionJobData {
+  txId: string;
+  userId: string;
+  destinationPublicKey: string;
+  amount: string;
+  assetCode: string;
+  assetIssuer?: string;
+  memo?: string;
+}
+
+@Processor('transactions')
 @Injectable()
 export class TransactionProcessor {
   constructor(
-    private prisma: PrismaClient,
+    private prisma: PrismaService,
     private auditService: AuditService,
     private logger: Logger,
     private fraudService: FraudService,
   ) {}
 
-  async sendTransaction(
+  /**
+   * BullMQ worker entry-point. Invoked once per job on the 'transactions' queue.
+   *
+   * Idempotency at the processor level:
+   * - BullMQ deduplicates jobs by `jobId` (`send:{userId}:{idempotencyKey}`),
+   *   so a duplicate POST that races past the Redis + DB guards still collapses
+   *   to a single job execution here.
+   * - The processor loads the existing Transaction row (created by
+   *   TransactionService.sendTransfer) instead of creating a new one, so no
+   *   duplicate DB records are ever produced.
+   * - If the row is already in a terminal state (SUCCESS / FAILED /
+   *   PENDING_REVIEW) we skip re-processing and return early — handles the
+   *   edge case of a job being retried after the transaction already settled.
+   */
+  @Process('process')
+  async handleSendTransaction(job: Job<TransactionJobData>) {
+    const { txId, userId, destinationPublicKey, amount, assetCode, memo } = job.data;
+
+    // Load the pre-created transaction record (created by TransactionService).
+    const transaction = await this.prisma.transaction.findUnique({ where: { id: txId } });
+
+    if (!transaction) {
+      // Should never happen — log and fail the job without retrying.
+      this.logger.error({ event: 'transaction_job_missing', txId, jobId: job.id });
+      throw new Error(`Transaction ${txId} not found for job ${job.id}`);
+    }
+
+    // Guard: skip re-processing if the transaction already reached a terminal
+    // state (e.g. job retried after SUCCESS/FAILED, or concurrent duplicate job
+    // that slipped through before BullMQ deduplication kicked in).
+    if (['SUCCESS', 'FAILED', 'PENDING_REVIEW'].includes(transaction.status)) {
+      this.logger.info({
+        event: 'transaction_job_skipped_terminal',
+        txId,
+        status: transaction.status,
+        jobId: job.id,
+      });
+      return transaction;
+    }
+
+    return this.processTransaction(userId, transaction, amount, assetCode, destinationPublicKey, memo);
+  }
+
+  /**
+   * Core processing logic — shared between the BullMQ handler and direct calls
+   * in tests. Runs fraud checks then submits on-chain.
+   */
+  async processTransaction(
     userId: string,
-    walletId: string,
-    fromAddress: string,
-    toAddress: string,
+    transaction: { id: string; walletId: string; amount: string; destination?: string; [key: string]: any },
     amount: string,
     assetCode: string,
+    toAddress: string,
     memo?: string,
   ) {
-    // Create transaction record
-    const transaction = await this.prisma.transaction.create({
-      data: {
-        walletId,
-        fromAddress,
-        toAddress,
-        amount,
-        assetCode,
-        type: 'send',
-        status: 'PENDING',
-        memo,
-      },
-    });
-
     // Fail closed if the stored value differs from the amount that passed the
     // request/simulation checks. Never score or submit a mutated transaction.
     assertTransactionAmountIntegrity(amount, transaction.amount);
@@ -50,7 +100,6 @@ export class TransactionProcessor {
     // Audit: Transaction initiated
     await this.auditService.log(userId, 'TRANSACTION_INITIATE', {
       transactionId: transaction.id,
-      fromAddress,
       toAddress,
       amount,
       assetCode,
@@ -60,7 +109,6 @@ export class TransactionProcessor {
       event: 'transaction_initiated',
       userId,
       transactionId: transaction.id,
-      fromAddress,
       toAddress,
       amount,
       assetCode,
@@ -84,14 +132,13 @@ export class TransactionProcessor {
         where: { id: transaction.id },
         data: {
           status: 'SUCCESS',
-          txHash: result.hash,
+          stellarTxHash: result.hash,
         },
       });
 
       await this.auditService.log(userId, 'TRANSACTION_COMPLETE', {
         transactionId: transaction.id,
         txHash: result.hash,
-        fromAddress,
         toAddress,
         amount,
       });
@@ -112,7 +159,6 @@ export class TransactionProcessor {
 
       await this.auditService.log(userId, 'TRANSACTION_FAILED', {
         transactionId: transaction.id,
-        fromAddress,
         toAddress,
         amount,
         error: error.message,
