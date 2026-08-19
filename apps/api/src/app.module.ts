@@ -5,6 +5,7 @@ import { WalletModule } from './wallet/wallet.module';
 import { TransactionModule } from './transaction/transaction.module';
 import { LoggerModule } from 'nestjs-pino';
 import { AdminModule } from './admin/admin.module';
+import { RateLimitModule } from './rate-limit/rate-limit.module';
 
 @Module({
   imports: [
@@ -19,6 +20,10 @@ import { AdminModule } from './admin/admin.module';
         }),
       },
     }),
+    // Registers RateLimitGuardRedis as a global APP_GUARD so every
+    // @RateLimit(...) decorated route is enforced. Routes without the
+    // decorator are unaffected (the guard is a no-op for them).
+    RateLimitModule,
     AuditModule,
     AuthModule,
     WalletModule,

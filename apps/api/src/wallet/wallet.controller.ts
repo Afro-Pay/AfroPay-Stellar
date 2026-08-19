@@ -36,9 +36,19 @@ export class WalletController {
   }
 
   @Get('balances')
+  // Balance fetches proxy to Stellar Horizon; cap per-user request rate so a
+  // single caller can't exhaust Horizon's shared-IP rate limit for everyone.
+  @RateLimit({
+    keyPrefix: 'wallet:balances',
+    limit: 10,
+    windowMs: 60_000,
+    limitEnv: 'WALLET_BALANCES_RATE_LIMIT_MAX',
+    windowMsEnv: 'WALLET_BALANCES_RATE_LIMIT_WINDOW_MS',
+  })
   @ApiOperation({ summary: 'Get wallet balances' })
   @ApiQuery({ name: 'afterTxHash', required: false, type: String })
   @ApiResponse({ status: 200, description: 'Returns wallet balances' })
+  @ApiResponse({ status: 429, description: 'Too many requests' })
   async getBalances(
     @Request() req: any,
     @Query('afterTxHash') afterTxHash?: string,
