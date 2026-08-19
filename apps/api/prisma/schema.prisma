@@ -32,14 +32,33 @@ enum KycTier {
   FULL
 }
 
+enum UserRole {
+  USER
+  ADMIN
+}
+
 model User {
   id           String        @id @default(uuid())
   email        String        @unique
   password     String
+  name         String?
+  role         UserRole      @default(USER)
+  erasedAt     DateTime?
   createdAt    DateTime      @default(now())
   wallet       Wallet?
   transactions Transaction[]
   kyc          KycRecord?
+}
+
+/// Non-reversible lookup record used to make erasure idempotent after the
+/// original user identifier has been replaced. Never store the original ID.
+model AnonymizationTombstone {
+  id                  String   @id @default(uuid())
+  originalUserIdHash  String   @unique
+  pseudonymousUserId  String   @unique
+  erasedAt            DateTime @default(now())
+
+  @@index([erasedAt])
 }
 
 model Wallet {
