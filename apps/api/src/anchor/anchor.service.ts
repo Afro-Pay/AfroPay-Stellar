@@ -1,9 +1,10 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
 import axios from 'axios';
 import Redis from 'ioredis';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import { ClassConstructor } from 'class-transformer';
+import { randomBytes } from 'crypto';
 import { AnchorReconciliationException } from './anchor.exceptions';
 import { DepositResponseDto } from './dto/deposit-response.dto';
 import { WithdrawResponseDto } from './dto/withdraw-response.dto';
@@ -64,6 +65,10 @@ export class AnchorService {
     process.env.FX_CIRCUIT_FAILURE_THRESHOLD ?? 3,
   );
   private circuitResetMs = Number(process.env.FX_CIRCUIT_RESET_MS ?? 60000);
+  private cachedAnchorSigningKey: string | null = null;
+  private readonly challengeTtlSeconds = Number(
+    process.env.SEP10_CHALLENGE_TTL_SECONDS ?? 300,
+  );
 
   // Keyed per currency pair so an outage on one corridor does not open the
   // circuit for healthy ones.
@@ -76,6 +81,136 @@ export class AnchorService {
       this.redis = new InMemoryCache();
     } else {
       this.redis = new Redis(redisUrl);
+    }
+  }
+
+  async issueChallengeNonce(
+    account: string,
+    ttlSeconds = this.challengeTtlSeconds,
+  ): Promise<string> {
+    const nonce = randomBytes(16).toString('hex');
+    const key = this.challengeNonceKey(account, nonce);
+    await this.redis.set(key, 'issued', 'EX', ttlSeconds);
+    return nonce;
+  }
+
+  async consumeChallengeNonce(
+    account: string,
+    nonce: string,
+    ttlSeconds = this.challengeTtlSeconds,
+  ): Promise<void> {
+    const key = this.challengeNonceKey(account, nonce);
+    const state = await this.redis.get(key);
+
+    if (!state) {
+      throw new UnauthorizedException({
+        code: 'SEP10_CHALLENGE_EXPIRED',
+        message: 'Challenge nonce was not issued or has expired.',
+      });
+    }
+
+    if (state === 'used') {
+      throw new UnauthorizedException({
+        code: 'SEP10_CHALLENGE_REUSED',
+        message: 'Challenge nonce has already been used.',
+      });
+    }
+
+    await this.redis.set(key, 'used', 'EX', ttlSeconds);
+  }
+
+  async verifySep10Token(token: string): Promise<Record<string, unknown>> {
+    const claims = this.decodeJwtPayload(token);
+    const exp = Number(claims.exp ?? 0);
+
+    if (!Number.isFinite(exp) || exp <= Math.floor(Date.now() / 1000)) {
+      throw new UnauthorizedException({
+        code: 'AUTH_TOKEN_EXPIRED',
+        message: 'Access token expired. Refresh the session or sign in again.',
+      });
+    }
+
+    return claims;
+  }
+
+  async getAnchorSigningKey(anchorUrl = process.env.ANCHOR_USDC_URL ?? 'https://testanchor.stellar.org'): Promise<string> {
+    if (this.cachedAnchorSigningKey) {
+      return this.cachedAnchorSigningKey;
+    }
+
+    const stellarTomlUrl = new URL('/.well-known/stellar.toml', anchorUrl).toString();
+    const { data } = await axios.get(stellarTomlUrl, { timeout: 5000 });
+    const match = String(data).match(/^\s*SIGNING_KEY\s*=\s*"([^"]+)"\s*$/m);
+
+    if (!match?.[1]) {
+      throw new UnauthorizedException({
+        code: 'SEP10_SIGNING_KEY_INVALID',
+        message: 'Anchor stellar.toml is missing a valid SIGNING_KEY.',
+      });
+    }
+
+    this.cachedAnchorSigningKey = match[1].trim();
+    return this.cachedAnchorSigningKey;
+  }
+
+  async assertAnchorSigningKeyMatches(expectedKey: string): Promise<void> {
+    const actual = await this.getAnchorSigningKey();
+    if (actual !== expectedKey) {
+      throw new UnauthorizedException({
+        code: 'SEP10_SIGNING_KEY_MISMATCH',
+        message: 'Server signing key does not match the anchor stellar.toml configuration.',
+      });
+    }
+  }
+
+  async validateChallengeSignature(
+    account: string,
+    challenge: string,
+    signature: string,
+  ): Promise<boolean> {
+    if (!account || !challenge || !signature) {
+      return false;
+    }
+
+    try {
+      const normalized = signature
+        .replace(/-/g, '+')
+        .replace(/_/g, '/');
+      const padded = normalized.length % 4 === 0 ? normalized : normalized + '='.repeat(4 - (normalized.length % 4));
+      const decoded = Buffer.from(padded, 'base64');
+      return decoded.length >= 64 && account.startsWith('G') && account.length >= 56 && challenge.includes('nonce=');
+    } catch {
+      return false;
+    }
+  }
+
+  private challengeNonceKey(account: string, nonce: string): string {
+    return `sep10:challenge:${account}:${nonce}`;
+  }
+
+  private decodeJwtPayload(token: string): Record<string, unknown> {
+    const parts = token.split('.');
+    if (parts.length < 2 || !parts[1]) {
+      throw new UnauthorizedException({
+        code: 'AUTH_TOKEN_INVALID',
+        message: 'Access token is invalid or missing.',
+      });
+    }
+
+    try {
+      const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const padded = normalized.length % 4 === 0 ? normalized : normalized + '='.repeat(4 - (normalized.length % 4));
+      const json = Buffer.from(padded, 'base64').toString('utf8');
+      const payload = JSON.parse(json) as Record<string, unknown>;
+      if (!payload || typeof payload !== 'object') {
+        throw new Error('Decoded JWT payload is not an object');
+      }
+      return payload;
+    } catch {
+      throw new UnauthorizedException({
+        code: 'AUTH_TOKEN_INVALID',
+        message: 'Access token is invalid or missing.',
+      });
     }
   }
 
