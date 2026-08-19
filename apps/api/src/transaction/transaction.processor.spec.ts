@@ -4,6 +4,12 @@ import { AuditService } from '../audit/audit.service';
 import { Logger } from 'nestjs-pino';
 import { TransactionProcessor } from './transaction.processor';
 import { FraudService } from './fraud.service';
+import { TransactionDlqService } from './transaction-dlq.service';
+import {
+  TRANSACTION_DLQ_JOB_NAME,
+  TRANSACTION_MAX_ATTEMPTS,
+  TRANSACTION_QUEUE_OPTIONS,
+} from './transaction-retry.config';
 
 // ---------------------------------------------------------------------------
 // Shared mock helpers
@@ -437,6 +443,136 @@ describe('TransactionProcessor', () => {
       expect(second.status).toBe('SUCCESS');
       // Fraud service only called once (by the first job)
       expect(mocks.mockFraudService.score).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe('Transaction DLQ routing', () => {
+  function makeDlqMocks() {
+    const transactionQueue = {
+      on: jest.fn(),
+      off: jest.fn(),
+      add: jest.fn().mockResolvedValue({ id: 'replay-job-1' }),
+    };
+    const dlqQueue = {
+      add: jest.fn(),
+      getJob: jest.fn(),
+      getJobs: jest.fn().mockResolvedValue([]),
+      getJobCounts: jest.fn().mockResolvedValue({ waiting: 0, delayed: 0, failed: 0, paused: 0 }),
+    };
+    const logger = {
+      error: jest.fn(),
+      warn: jest.fn(),
+    };
+
+    return { transactionQueue, dlqQueue, logger };
+  }
+
+  it('moves exhausted failed jobs into transaction-dlq with payload and error trace', async () => {
+    const { transactionQueue, dlqQueue, logger } = makeDlqMocks();
+    const service = new TransactionDlqService(
+      transactionQueue as any,
+      dlqQueue as any,
+      logger as any,
+    );
+    const job = {
+      id: 'job-123',
+      name: 'process',
+      data: { txId: BASE_TRANSACTION.id, userId: BASE_TRANSACTION.userId, amount: '100' },
+      opts: { attempts: TRANSACTION_MAX_ATTEMPTS },
+      attemptsMade: TRANSACTION_MAX_ATTEMPTS,
+      failedReason: 'stellar submission failed',
+      stacktrace: ['Error: stellar submission failed'],
+    };
+
+    await expect(service.routeFailedJobToDlq(job as any, new Error('fallback'))).resolves.toBe(
+      true,
+    );
+
+    expect(dlqQueue.add).toHaveBeenCalledWith(
+      TRANSACTION_DLQ_JOB_NAME,
+      expect.objectContaining({
+        originalJobId: 'job-123',
+        originalJobName: 'process',
+        payload: job.data,
+        errorMessage: 'stellar submission failed',
+        stacktrace: ['Error: stellar submission failed'],
+        attemptsMade: TRANSACTION_MAX_ATTEMPTS,
+        maxAttempts: TRANSACTION_MAX_ATTEMPTS,
+      }),
+      expect.objectContaining({
+        jobId: `${TRANSACTION_DLQ_JOB_NAME}:job-123:${TRANSACTION_MAX_ATTEMPTS}`,
+        removeOnComplete: false,
+        removeOnFail: false,
+      }),
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'transaction_dlq_enqueued',
+        originalJobId: 'job-123',
+        error: 'stellar submission failed',
+      }),
+    );
+  });
+
+  it('does not route jobs that still have retries remaining', async () => {
+    const { transactionQueue, dlqQueue, logger } = makeDlqMocks();
+    const service = new TransactionDlqService(
+      transactionQueue as any,
+      dlqQueue as any,
+      logger as any,
+    );
+    const job = {
+      id: 'job-124',
+      name: 'process',
+      data: { txId: BASE_TRANSACTION.id },
+      opts: { attempts: TRANSACTION_MAX_ATTEMPTS },
+      attemptsMade: 1,
+      stacktrace: [],
+    };
+
+    await expect(service.routeFailedJobToDlq(job as any, new Error('retry later'))).resolves.toBe(
+      false,
+    );
+
+    expect(dlqQueue.add).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('replays a DLQ job back onto the transaction queue with fresh retry options', async () => {
+    const { transactionQueue, dlqQueue, logger } = makeDlqMocks();
+    const dlqJob = {
+      id: 'dlq-job-1',
+      data: {
+        originalJobName: 'process',
+        payload: { txId: BASE_TRANSACTION.id, userId: BASE_TRANSACTION.userId },
+      },
+      update: jest.fn().mockResolvedValue(undefined),
+    };
+    dlqQueue.getJob.mockResolvedValue(dlqJob);
+    const service = new TransactionDlqService(
+      transactionQueue as any,
+      dlqQueue as any,
+      logger as any,
+    );
+
+    const result = await service.replay('dlq-job-1');
+
+    expect(transactionQueue.add).toHaveBeenCalledWith(
+      'process',
+      dlqJob.data.payload,
+      expect.objectContaining({
+        ...TRANSACTION_QUEUE_OPTIONS,
+        jobId: expect.stringMatching(/^replay:dlq-job-1:/),
+      }),
+    );
+    expect(dlqJob.update).toHaveBeenCalledWith(
+      expect.objectContaining({ replayJobId: 'replay-job-1' }),
+    );
+    expect(result).toEqual({
+      dlqJobId: 'dlq-job-1',
+      replayJobId: 'replay-job-1',
+      status: 'requeued',
     });
   });
 });
