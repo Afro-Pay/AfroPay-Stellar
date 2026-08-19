@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { PrismaClient } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { Logger } from 'nestjs-pino';
 import { TransactionProcessor } from './transaction.processor';
@@ -13,8 +13,7 @@ const BASE_TRANSACTION = {
   id: 'tx-001',
   walletId: 'wallet-001',
   userId: 'user-001',
-  fromAddress: 'GABC',
-  toAddress: 'GXYZ',
+  destination: 'GXYZ',
   amount: '100',
   assetCode: 'XLM',
   status: 'PENDING',
@@ -26,7 +25,7 @@ const BASE_TRANSACTION = {
 function makeMocks() {
   const mockPrisma = {
     transaction: {
-      create: jest.fn().mockResolvedValue({ ...BASE_TRANSACTION }),
+      findUnique: jest.fn().mockResolvedValue({ ...BASE_TRANSACTION }),
       update: jest.fn().mockImplementation(({ data }) =>
         Promise.resolve({ ...BASE_TRANSACTION, ...data }),
       ),
@@ -66,7 +65,7 @@ describe('TransactionProcessor', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TransactionProcessor,
-        { provide: PrismaClient, useValue: mocks.mockPrisma },
+        { provide: PrismaService, useValue: mocks.mockPrisma },
         { provide: AuditService, useValue: mocks.mockAuditService },
         { provide: Logger, useValue: mocks.mockLogger },
         { provide: FraudService, useValue: mocks.mockFraudService },
@@ -77,18 +76,108 @@ describe('TransactionProcessor', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Helper: invoke sendTransaction with default args
+  // Helper: invoke processTransaction with default args (mirrors what the
+  // BullMQ @Process handler calls after loading the row by txId).
   // -------------------------------------------------------------------------
-  const callSend = (overrides: Partial<typeof BASE_TRANSACTION> = {}) =>
-    processor.sendTransaction(
+  const callProcess = (overrides: Partial<typeof BASE_TRANSACTION> = {}) =>
+    processor.processTransaction(
       overrides.userId ?? BASE_TRANSACTION.userId,
-      overrides.walletId ?? BASE_TRANSACTION.walletId,
-      overrides.fromAddress ?? BASE_TRANSACTION.fromAddress,
-      overrides.toAddress ?? BASE_TRANSACTION.toAddress,
+      { ...BASE_TRANSACTION, ...overrides },
       overrides.amount ?? BASE_TRANSACTION.amount,
       overrides.assetCode ?? BASE_TRANSACTION.assetCode,
+      overrides.destination ?? 'GXYZ',
       overrides.memo,
     );
+
+  // =========================================================================
+  // handleSendTransaction — BullMQ entry-point guards
+  // =========================================================================
+  describe('handleSendTransaction (BullMQ @Process handler)', () => {
+    const makeJob = (data: Record<string, any> = {}) =>
+      ({
+        id: 'job-001',
+        data: {
+          txId: BASE_TRANSACTION.id,
+          userId: BASE_TRANSACTION.userId,
+          destinationPublicKey: 'GXYZ',
+          amount: BASE_TRANSACTION.amount,
+          assetCode: BASE_TRANSACTION.assetCode,
+          ...data,
+        },
+      } as any);
+
+    beforeEach(() => {
+      mocks.mockFraudService.score.mockResolvedValue({
+        tx_id: BASE_TRANSACTION.id,
+        risk_score: 0.1,
+        flagged: false,
+        reasons: [],
+      });
+    });
+
+    it('loads the existing transaction by txId — does NOT create a new record', async () => {
+      await processor.handleSendTransaction(makeJob());
+
+      expect(mocks.mockPrisma.transaction.findUnique).toHaveBeenCalledWith({
+        where: { id: BASE_TRANSACTION.id },
+      });
+      // No create call — the row was already created by TransactionService
+      expect((mocks.mockPrisma.transaction as any).create).toBeUndefined();
+    });
+
+    it('throws and fails the job when the transaction row is missing', async () => {
+      mocks.mockPrisma.transaction.findUnique.mockResolvedValue(null);
+
+      await expect(processor.handleSendTransaction(makeJob())).rejects.toThrow(
+        `Transaction ${BASE_TRANSACTION.id} not found`,
+      );
+    });
+
+    it('skips re-processing a SUCCESS transaction (idempotent re-delivery guard)', async () => {
+      mocks.mockPrisma.transaction.findUnique.mockResolvedValue({
+        ...BASE_TRANSACTION,
+        status: 'SUCCESS',
+      });
+
+      const result = await processor.handleSendTransaction(makeJob());
+
+      // Returns the terminal record without calling fraud service or update
+      expect(result.status).toBe('SUCCESS');
+      expect(mocks.mockFraudService.score).not.toHaveBeenCalled();
+      expect(mocks.mockPrisma.transaction.update).not.toHaveBeenCalled();
+    });
+
+    it('skips re-processing a FAILED transaction', async () => {
+      mocks.mockPrisma.transaction.findUnique.mockResolvedValue({
+        ...BASE_TRANSACTION,
+        status: 'FAILED',
+      });
+
+      const result = await processor.handleSendTransaction(makeJob());
+
+      expect(result.status).toBe('FAILED');
+      expect(mocks.mockFraudService.score).not.toHaveBeenCalled();
+    });
+
+    it('skips re-processing a PENDING_REVIEW transaction', async () => {
+      mocks.mockPrisma.transaction.findUnique.mockResolvedValue({
+        ...BASE_TRANSACTION,
+        status: 'PENDING_REVIEW',
+      });
+
+      const result = await processor.handleSendTransaction(makeJob());
+
+      expect(result.status).toBe('PENDING_REVIEW');
+      expect(mocks.mockFraudService.score).not.toHaveBeenCalled();
+    });
+
+    it('processes a PENDING transaction end-to-end (low risk path)', async () => {
+      const result = await processor.handleSendTransaction(makeJob());
+
+      expect(mocks.mockFraudService.score).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe('SUCCESS');
+    });
+  });
 
   // =========================================================================
   // Tier 1 — HIGH RISK (riskScore >= 0.8) → FAILED, not submitted
@@ -104,7 +193,7 @@ describe('TransactionProcessor', () => {
     });
 
     it('sets status to FAILED and does not call processOnChain', async () => {
-      const result = await callSend();
+      const result = await callProcess();
 
       expect(result.status).toBe('FAILED');
       expect(result.flagged).toBe(true);
@@ -112,7 +201,7 @@ describe('TransactionProcessor', () => {
     });
 
     it('persists riskScore and flagged=true in the DB update', async () => {
-      await callSend();
+      await callProcess();
 
       expect(mocks.mockPrisma.transaction.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -123,7 +212,7 @@ describe('TransactionProcessor', () => {
     });
 
     it('emits a TRANSACTION_BLOCKED audit event', async () => {
-      await callSend();
+      await callProcess();
 
       expect(mocks.mockAuditService.log).toHaveBeenCalledWith(
         BASE_TRANSACTION.userId,
@@ -140,7 +229,7 @@ describe('TransactionProcessor', () => {
         reasons: [],
       });
 
-      const result = await callSend();
+      const result = await callProcess();
       expect(result.status).toBe('FAILED');
     });
   });
@@ -159,7 +248,7 @@ describe('TransactionProcessor', () => {
     });
 
     it('sets status to PENDING_REVIEW and does not submit on-chain', async () => {
-      const result = await callSend();
+      const result = await callProcess();
 
       expect(result.status).toBe('PENDING_REVIEW');
       expect(result.flagged).toBe(true);
@@ -167,7 +256,7 @@ describe('TransactionProcessor', () => {
     });
 
     it('persists riskScore and flagged=true in the DB update', async () => {
-      await callSend();
+      await callProcess();
 
       expect(mocks.mockPrisma.transaction.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -182,7 +271,7 @@ describe('TransactionProcessor', () => {
     });
 
     it('emits a TRANSACTION_PENDING_REVIEW audit event', async () => {
-      await callSend();
+      await callProcess();
 
       expect(mocks.mockAuditService.log).toHaveBeenCalledWith(
         BASE_TRANSACTION.userId,
@@ -199,7 +288,7 @@ describe('TransactionProcessor', () => {
         reasons: [],
       });
 
-      const result = await callSend();
+      const result = await callProcess();
       expect(result.status).toBe('PENDING_REVIEW');
     });
   });
@@ -218,13 +307,13 @@ describe('TransactionProcessor', () => {
     });
 
     it('sets status to SUCCESS after on-chain submission', async () => {
-      const result = await callSend();
+      const result = await callProcess();
 
       expect(result.status).toBe('SUCCESS');
     });
 
     it('persists riskScore and flagged=false before submission', async () => {
-      await callSend();
+      await callProcess();
 
       // The first update call persists the low-risk score without changing status.
       const firstUpdate = mocks.mockPrisma.transaction.update.mock.calls[0][0];
@@ -233,7 +322,7 @@ describe('TransactionProcessor', () => {
     });
 
     it('emits TRANSACTION_INITIATE and TRANSACTION_COMPLETE audit events', async () => {
-      await callSend();
+      await callProcess();
 
       const eventNames = mocks.mockAuditService.log.mock.calls.map((c) => c[1]);
       expect(eventNames).toContain('TRANSACTION_INITIATE');
@@ -248,7 +337,7 @@ describe('TransactionProcessor', () => {
         reasons: [],
       });
 
-      const result = await callSend();
+      const result = await callProcess();
       expect(result.status).toBe('SUCCESS');
     });
   });
@@ -262,13 +351,13 @@ describe('TransactionProcessor', () => {
     });
 
     it('sets status to FAILED and does not submit on-chain', async () => {
-      const result = await callSend();
+      const result = await callProcess();
 
       expect(result.status).toBe('FAILED');
     });
 
     it('emits a TRANSACTION_FAILED audit event with the service error', async () => {
-      await callSend();
+      await callProcess();
 
       expect(mocks.mockAuditService.log).toHaveBeenCalledWith(
         BASE_TRANSACTION.userId,
@@ -297,11 +386,57 @@ describe('TransactionProcessor', () => {
         reasons: [],
       });
 
-      const result = await callSend();
+      const result = await callProcess();
 
       expect(result.riskScore).toBe(score);
       expect(result.flagged).toBe(flag);
       expect(result.status).toBe(status);
+    });
+  });
+
+  // =========================================================================
+  // Idempotency — concurrent duplicate job guard
+  // =========================================================================
+  describe('idempotency — duplicate job guard', () => {
+    it('a second job for the same txId that arrives after SUCCESS returns immediately without re-processing', async () => {
+      mocks.mockFraudService.score.mockResolvedValue({
+        tx_id: BASE_TRANSACTION.id,
+        risk_score: 0.1,
+        flagged: false,
+        reasons: [],
+      });
+
+      // Simulate: first job processes → sets SUCCESS; second job finds terminal state.
+      let callCount = 0;
+      mocks.mockPrisma.transaction.findUnique.mockImplementation(() => {
+        callCount++;
+        return Promise.resolve({
+          ...BASE_TRANSACTION,
+          status: callCount === 1 ? 'PENDING' : 'SUCCESS',
+        });
+      });
+
+      const makeJob = (overrides = {}) =>
+        ({
+          id: `job-${Math.random()}`,
+          data: {
+            txId: BASE_TRANSACTION.id,
+            userId: BASE_TRANSACTION.userId,
+            destinationPublicKey: 'GXYZ',
+            amount: BASE_TRANSACTION.amount,
+            assetCode: BASE_TRANSACTION.assetCode,
+            ...overrides,
+          },
+        } as any);
+
+      // First job: PENDING → processes normally
+      await processor.handleSendTransaction(makeJob());
+      // Second job: finds SUCCESS → skips
+      const second = await processor.handleSendTransaction(makeJob());
+
+      expect(second.status).toBe('SUCCESS');
+      // Fraud service only called once (by the first job)
+      expect(mocks.mockFraudService.score).toHaveBeenCalledTimes(1);
     });
   });
 });
