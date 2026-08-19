@@ -4,7 +4,7 @@ import { AuthModule } from './auth/auth.module';
 import { WalletModule } from './wallet/wallet.module';
 import { TransactionModule } from './transaction/transaction.module';
 import { LoggerModule } from 'nestjs-pino';
-import { RateLimitModule } from './rate-limit/rate-limit.module';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
   imports: [
@@ -23,7 +23,7 @@ import { RateLimitModule } from './rate-limit/rate-limit.module';
     AuthModule,
     WalletModule,
     TransactionModule,
-    RateLimitModule,
+    AdminModule,
   ],
 })
 export class AppModule {}
