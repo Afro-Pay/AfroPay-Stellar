@@ -32,6 +32,25 @@ pub static TX_FAILURE_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     c
 });
 
+pub static SSE_EVENTS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    let c = IntCounter::with_opts(Opts::new("sse_events_total", "Total SSE events received from Horizon")).expect("create counter");
+    REGISTRY.register(Box::new(c.clone())).ok();
+    c
+});
+
+pub static SSE_STATUS_UPDATES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    let c = IntCounter::with_opts(Opts::new("sse_status_updates_total", "Total status updates via SSE")).expect("create counter");
+    REGISTRY.register(Box::new(c.clone())).ok();
+    c
+});
+
+pub static SSE_ERRORS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    let c = IntCounter::with_opts(Opts::new("sse_errors_total", "Total SSE processing errors")).expect("create counter");
+    REGISTRY.register(Box::new(c.clone())).ok();
+    c
+});
+
+#[allow(dead_code)]
 pub async fn serve() {
     let port: u16 = std::env::var("METRICS_PORT")
         .ok()

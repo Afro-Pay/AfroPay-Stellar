@@ -1,7 +1,7 @@
 use std::env;
 use stellar_sdk::{
     types::{AccountId, Asset, Memo, MemoText, Operation, Transaction},
-    HorizonClient, Keypair, Network, Server,
+    HorizonClient, Keypair, Network,
 };
 
 pub struct StellarService {
