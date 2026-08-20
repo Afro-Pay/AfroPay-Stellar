@@ -13,6 +13,8 @@ NETWORK="testnet"
 SOURCE_ACCOUNT="$DEFAULT_SOURCE_ACCOUNT"
 FUND="false"
 SKIP_BUILD="false"
+UPGRADE="false"
+CONTRACT_ID=""
 
 require_stellar_cli() {
   if ! command -v stellar >/dev/null 2>&1; then
@@ -43,6 +45,8 @@ Options:
   --source <account>          Source/signing account alias (default: afropay_escrow_deployer)
   --fund                      Fund the source account via friendbot (testnet/local)
   --skip-build                Skip wasm build step
+  --upgrade                   Upgrade an existing contract and run migrate
+  --contract-id <id>          Existing contract id used with --upgrade
   -h, --help                  Show this help message
 
 Examples:
@@ -153,7 +157,7 @@ validate_deployed_contract() {
     -- \
     version)"
 
-  if [[ "$version" != "1" ]]; then
+  if [[ "$version" != "2" ]]; then
     echo "error: unexpected contract version '$version'"
     exit 1
   fi
@@ -179,6 +183,14 @@ while [[ $# -gt 0 ]]; do
     --skip-build)
       SKIP_BUILD="true"
       shift
+      ;;
+    --upgrade)
+      UPGRADE="true"
+      shift
+      ;;
+    --contract-id)
+      CONTRACT_ID="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -207,14 +219,48 @@ if [[ ! -f "$WASM_FILE" ]]; then
   exit 1
 fi
 
-echo "==> Deploying $CONTRACT_PACKAGE to $NETWORK"
-CONTRACT_ID="$(
-  stellar contract deploy \
+if [[ "$UPGRADE" == "true" ]]; then
+  if [[ -z "$CONTRACT_ID" ]]; then
+    echo "error: --upgrade requires --contract-id"
+    exit 1
+  fi
+
+  echo "==> Installing upgrade wasm"
+  WASM_HASH="$(stellar contract install \
     --wasm "$WASM_FILE" \
     --source-account "$SOURCE_ACCOUNT" \
+    --network "$NETWORK")"
+  echo "==> Upgrading $CONTRACT_ID"
+  stellar contract upgrade \
+    --id "$CONTRACT_ID" \
+    --wasm-hash "$WASM_HASH" \
+    --source-account "$SOURCE_ACCOUNT" \
+    --network "$NETWORK"
+  echo "==> Migrating storage"
+  stellar contract invoke \
+    --id "$CONTRACT_ID" \
+    --source-account "$SOURCE_ACCOUNT" \
     --network "$NETWORK" \
-    --alias "$CONTRACT_ALIAS"
-)"
+    -- \
+    migrate \
+    --admin "$SOURCE_ACCOUNT"
+else
+  echo "==> Deploying $CONTRACT_PACKAGE to $NETWORK"
+  CONTRACT_ID="$(
+    stellar contract deploy \
+      --wasm "$WASM_FILE" \
+      --source-account "$SOURCE_ACCOUNT" \
+      --network "$NETWORK" \
+      --alias "$CONTRACT_ALIAS"
+  )"
+  stellar contract invoke \
+    --id "$CONTRACT_ID" \
+    --source-account "$SOURCE_ACCOUNT" \
+    --network "$NETWORK" \
+    -- \
+    initialize \
+    --admin "$SOURCE_ACCOUNT"
+fi
 
 echo "==> Deployed contract id: $CONTRACT_ID"
 save_deployment_record "$NETWORK" "$SOURCE_ACCOUNT" "$CONTRACT_ID"
