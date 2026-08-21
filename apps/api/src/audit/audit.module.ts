@@ -1,36 +1,24 @@
 import { Module, Global } from '@nestjs/common';
-import { AuditService } from './audit.service';
-import { PrismaClient } from '@prisma/client';
-import { LoggerModule } from 'nestjs-pino';
+import { PassportModule } from '@nestjs/passport';
+import { JwtModule } from '@nestjs/jwt';
+import { PrismaModule } from '../prisma/prisma.module';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { JwtStrategy } from '../auth/jwt.strategy';
+import { AdminGuard } from '../admin/admin.guard';
+import { AuditLogService } from './audit.service';
+import { AuditLogController } from './audit.controller';
 
+// nestjs-pino's LoggerModule is registered once, globally, in AppModule —
+// the Logger it provides is available here without a second forRoot() call.
 @Global()
 @Module({
   imports: [
-    LoggerModule.forRoot({
-      pinoHttp: {
-        transport: process.env.NODE_ENV !== 'production'
-          ? { target: 'pino-pretty', options: { colorize: true } }
-          : undefined,
-        level: process.env.LOG_LEVEL || 'info',
-        customProps: () => ({
-          service: 'afropay-api',
-        }),
-      },
-    }),
+    PrismaModule,
+    PassportModule,
+    JwtModule.register({ secret: process.env.JWT_SECRET }),
   ],
-  providers: [
-    AuditService,
-    {
-      provide: PrismaClient,
-      useFactory: () => {
-        const prisma = new PrismaClient();
-        // Ensure audit_logs are append-only
-        // This is enforced at the database level with permissions
-        // But we also ensure no update/delete methods are exposed
-        return prisma;
-      },
-    },
-  ],
-  exports: [AuditService],
+  controllers: [AuditLogController],
+  providers: [AuditLogService, AdminGuard, JwtAuthGuard, JwtStrategy],
+  exports: [AuditLogService],
 })
 export class AuditModule {}
