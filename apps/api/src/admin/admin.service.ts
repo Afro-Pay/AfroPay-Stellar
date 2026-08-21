@@ -94,6 +94,13 @@ export class AdminComplianceService {
         where: { userId },
         select: { id: true, metadata: true },
       });
+      if (subjectAuditLogs.length > 0) {
+        // AuditLog rows are append-only at the database level (see the
+        // audit_log_immutable trigger); this transaction-scoped setting is
+        // the one narrow, explicit opt-in that lets erasure pseudonymise
+        // userId/metadata on existing rows without deleting them.
+        await tx.$executeRawUnsafe(`SET LOCAL audit_log.allow_anonymization = 'on'`);
+      }
       for (const log of subjectAuditLogs) {
         await tx.auditLog.update({
           where: { id: log.id },

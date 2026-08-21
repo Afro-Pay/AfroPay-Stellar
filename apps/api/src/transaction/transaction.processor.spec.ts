@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuditService } from '../audit/audit.service';
+import { AuditLogService } from '../audit/audit.service';
 import { Logger } from 'nestjs-pino';
 import { TransactionProcessor } from './transaction.processor';
 import { FraudService } from './fraud.service';
@@ -72,7 +72,7 @@ describe('TransactionProcessor', () => {
       providers: [
         TransactionProcessor,
         { provide: PrismaService, useValue: mocks.mockPrisma },
-        { provide: AuditService, useValue: mocks.mockAuditService },
+        { provide: AuditLogService, useValue: mocks.mockAuditService },
         { provide: Logger, useValue: mocks.mockLogger },
         { provide: FraudService, useValue: mocks.mockFraudService },
       ],
@@ -221,9 +221,11 @@ describe('TransactionProcessor', () => {
       await callProcess();
 
       expect(mocks.mockAuditService.log).toHaveBeenCalledWith(
-        BASE_TRANSACTION.userId,
-        'TRANSACTION_BLOCKED',
-        expect.objectContaining({ transactionId: BASE_TRANSACTION.id, riskScore: 0.9 }),
+        expect.objectContaining({
+          userId: BASE_TRANSACTION.userId,
+          operation: 'TX_BLOCKED',
+          metadata: expect.objectContaining({ transactionId: BASE_TRANSACTION.id, riskScore: 0.9 }),
+        }),
       );
     });
 
@@ -280,9 +282,11 @@ describe('TransactionProcessor', () => {
       await callProcess();
 
       expect(mocks.mockAuditService.log).toHaveBeenCalledWith(
-        BASE_TRANSACTION.userId,
-        'TRANSACTION_PENDING_REVIEW',
-        expect.objectContaining({ transactionId: BASE_TRANSACTION.id, riskScore: 0.6 }),
+        expect.objectContaining({
+          userId: BASE_TRANSACTION.userId,
+          operation: 'TX_PENDING_REVIEW',
+          metadata: expect.objectContaining({ transactionId: BASE_TRANSACTION.id, riskScore: 0.6 }),
+        }),
       );
     });
 
@@ -330,9 +334,9 @@ describe('TransactionProcessor', () => {
     it('emits TRANSACTION_INITIATE and TRANSACTION_COMPLETE audit events', async () => {
       await callProcess();
 
-      const eventNames = mocks.mockAuditService.log.mock.calls.map((c) => c[1]);
-      expect(eventNames).toContain('TRANSACTION_INITIATE');
-      expect(eventNames).toContain('TRANSACTION_COMPLETE');
+      const eventNames = mocks.mockAuditService.log.mock.calls.map((c) => c[0].operation);
+      expect(eventNames).toContain('TX_SUBMITTED');
+      expect(eventNames).toContain('TX_SUCCESS');
     });
 
     it('passes riskScore = 0.49 as low risk (boundary)', async () => {
@@ -366,11 +370,13 @@ describe('TransactionProcessor', () => {
       await callProcess();
 
       expect(mocks.mockAuditService.log).toHaveBeenCalledWith(
-        BASE_TRANSACTION.userId,
-        'TRANSACTION_FAILED',
         expect.objectContaining({
-          transactionId: BASE_TRANSACTION.id,
-          reason: 'Fraud service unavailable',
+          userId: BASE_TRANSACTION.userId,
+          operation: 'TX_FAILED',
+          metadata: expect.objectContaining({
+            transactionId: BASE_TRANSACTION.id,
+            reason: 'Fraud service unavailable',
+          }),
         }),
       );
     });

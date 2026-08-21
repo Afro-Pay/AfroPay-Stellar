@@ -1,7 +1,7 @@
 import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { PrismaClient } from '@prisma/client';
-import { AuditService } from '../audit/audit.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { AuditLogService, AuditCategory, AuditOperation, AuditOutcome } from '../audit/audit.service';
 import { Logger } from 'nestjs-pino';
 import * as bcrypt from 'bcrypt';
 
@@ -9,14 +9,14 @@ import * as bcrypt from 'bcrypt';
 export class AuthService {
   constructor(
     private jwtService: JwtService,
-    private prisma: PrismaClient,
-    private auditService: AuditService,
+    private prisma: PrismaService,
+    private auditService: AuditLogService,
     private logger: Logger,
   ) {}
 
   async register(email: string, password: string, name?: string, ipAddress?: string, userAgent?: string) {
     const hashedPassword = await bcrypt.hash(password, 10);
-    
+
     const user = await this.prisma.user.create({
       data: {
         email,
@@ -26,15 +26,15 @@ export class AuthService {
     });
 
     // Audit: Registration
-    await this.auditService.log(
-      user.id,
-      'REGISTER',
-      { email: user.email, name: user.name },
-      ipAddress,
-      userAgent,
-    );
+    await this.auditService.log({
+      userId: user.id,
+      category: AuditCategory.AUTH,
+      operation: AuditOperation.REGISTER,
+      outcome: AuditOutcome.SUCCESS,
+      metadata: { email: user.email, name: user.name, ipAddress, userAgent },
+    });
 
-    this.logger.info({
+    this.logger.log({
       event: 'user_registered',
       userId: user.id,
       email: user.email,
@@ -54,6 +54,13 @@ export class AuthService {
         email,
         ipAddress,
       });
+      await this.auditService.log({
+        userId: user?.id ?? null,
+        category: AuditCategory.AUTH,
+        operation: AuditOperation.LOGIN_FAILED,
+        outcome: AuditOutcome.FAILURE,
+        metadata: { email, ipAddress, userAgent },
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -61,15 +68,15 @@ export class AuthService {
     const accessToken = this.jwtService.sign(payload);
 
     // Audit: Login
-    await this.auditService.log(
-      user.id,
-      'LOGIN',
-      { email: user.email },
-      ipAddress,
-      userAgent,
-    );
+    await this.auditService.log({
+      userId: user.id,
+      category: AuditCategory.AUTH,
+      operation: AuditOperation.LOGIN,
+      outcome: AuditOutcome.SUCCESS,
+      metadata: { email: user.email, ipAddress, userAgent },
+    });
 
-    this.logger.info({
+    this.logger.log({
       event: 'user_logged_in',
       userId: user.id,
       email: user.email,
