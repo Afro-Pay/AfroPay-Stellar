@@ -3,6 +3,7 @@ import { AppModule } from './app.module';
 import { Logger } from 'nestjs-pino';
 import { ValidationPipe } from '@nestjs/common';
 import { CorrelationIdInterceptor } from './common/interceptors/correlation-id.interceptor';
+import { HttpMetricsInterceptor } from './metrics/http-metrics.interceptor';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -20,6 +21,10 @@ async function bootstrap() {
 
   // Global correlation ID interceptor
   app.useGlobalInterceptors(new CorrelationIdInterceptor());
+
+  // Global HTTP metrics interceptor — records request count and duration.
+  // Must be retrieved from the DI container so PrometheusService is injected.
+  app.useGlobalInterceptors(app.get(HttpMetricsInterceptor));
 
   // CORS
   app.enableCors({
