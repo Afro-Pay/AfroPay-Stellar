@@ -1,4 +1,3 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import {
   AuditLogService,
   AuditCategory,
@@ -27,20 +26,11 @@ const mockPrisma = {
 describe('AuditLogService', () => {
   let service: AuditLogService;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     jest.clearAllMocks();
-
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        AuditLogService,
-        { provide: 'PrismaService', useValue: mockPrisma },
-      ],
-    })
-      .overrideProvider('PrismaService')
-      .useValue(mockPrisma)
-      .compile();
-
-    // Manually construct with mock because NestJS DI token is PrismaService class.
+    // Constructed directly with the mock rather than through Nest's DI
+    // container — AuditLogService's real dependency is the PrismaService
+    // class, which this lightweight mock doesn't need to satisfy.
     service = new AuditLogService(mockPrisma as any);
   });
 
@@ -159,5 +149,73 @@ describe('AuditLogService', () => {
         }),
       }),
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // exportNdjson()
+  // -------------------------------------------------------------------------
+
+  describe('exportNdjson', () => {
+    async function collect(gen: AsyncGenerator<string>): Promise<string[]> {
+      const lines: string[] = [];
+      for await (const line of gen) lines.push(line);
+      return lines;
+    }
+
+    it('yields one NDJSON line per row, each terminated with a newline', async () => {
+      mockFindMany.mockResolvedValueOnce([
+        { id: 'audit-1', operation: 'WALLET_CREATED' },
+        { id: 'audit-2', operation: 'TX_SUBMITTED' },
+      ]);
+
+      const lines = await collect(service.exportNdjson({}));
+
+      expect(lines).toHaveLength(2);
+      lines.forEach((line) => expect(line.endsWith('\n')).toBe(true));
+      expect(JSON.parse(lines[0])).toEqual({ id: 'audit-1', operation: 'WALLET_CREATED' });
+      expect(JSON.parse(lines[1])).toEqual({ id: 'audit-2', operation: 'TX_SUBMITTED' });
+    });
+
+    it('applies userId/from/to filters to the underlying query', async () => {
+      mockFindMany.mockResolvedValueOnce([]);
+      const from = new Date('2024-01-01');
+      const to = new Date('2024-12-31');
+
+      await collect(service.exportNdjson({ userId: 'user-abc', from, to }));
+
+      expect(mockFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            userId: 'user-abc',
+            createdAt: { gte: from, lte: to },
+          }),
+          orderBy: { id: 'asc' },
+        }),
+      );
+    });
+
+    it('pages through results with a keyset cursor instead of loading everything at once', async () => {
+      // pageSize=2: a full page means there could be more, so it fetches again.
+      const page1 = [
+        { id: 'id-0', operation: 'TX_SUBMITTED' },
+        { id: 'id-1', operation: 'TX_SUBMITTED' },
+      ];
+      const page2 = [{ id: 'id-2', operation: 'TX_SUCCESS' }];
+      mockFindMany.mockResolvedValueOnce(page1).mockResolvedValueOnce(page2);
+
+      const lines = await collect(service.exportNdjson({}, 2));
+
+      expect(lines).toHaveLength(3);
+      expect(mockFindMany).toHaveBeenCalledTimes(2);
+      expect(mockFindMany.mock.calls[1][0]).toEqual(
+        expect.objectContaining({ cursor: { id: 'id-1' }, skip: 1 }),
+      );
+    });
+
+    it('yields nothing when no rows match', async () => {
+      mockFindMany.mockResolvedValueOnce([]);
+      const lines = await collect(service.exportNdjson({ userId: 'nobody' }));
+      expect(lines).toHaveLength(0);
+    });
   });
 });

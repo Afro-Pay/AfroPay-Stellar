@@ -15,6 +15,7 @@ describe('AdminComplianceService', () => {
 
   function makePrisma() {
     const tx = {
+      $executeRawUnsafe: jest.fn(),
       user: { create: jest.fn(), delete: jest.fn() },
       wallet: { update: jest.fn() },
       kycRecord: { delete: jest.fn() },
@@ -69,6 +70,9 @@ describe('AdminComplianceService', () => {
       data: { userId: result.pseudonymousUserId },
     });
     expect(prisma.tx.kycRecord.delete).toHaveBeenCalledWith({ where: { id: 'kyc-1' } });
+    expect(prisma.tx.$executeRawUnsafe).toHaveBeenCalledWith(
+      `SET LOCAL audit_log.allow_anonymization = 'on'`,
+    );
     expect(prisma.tx.auditLog.update).toHaveBeenCalledWith({
       where: { id: 'old-log' },
       data: { userId: result.pseudonymousUserId, metadata: { transactionId: 'tx-1' } },
