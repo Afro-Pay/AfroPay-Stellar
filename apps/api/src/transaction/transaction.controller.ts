@@ -19,6 +19,8 @@ import { KycGuard } from '../kyc/kyc.guard';
 import { RateLimit } from '../rate-limit/rate-limit.decorator';
 import {
   GetHistoryQueryDto,
+  GetTransactionsQueryDto,
+  PaginatedTransactionsDto,
   PaginatedHistoryDto,
   SendDto,
   TransactionResponseDto,
@@ -80,6 +82,14 @@ export class TransactionController {
     // Return only the response shape; the internal replay flag is not exposed,
     // so a replayed body is identical to the original.
     return { txId: result.txId, status: result.status };
+  }
+
+  @Get()
+  @ApiOperation({ summary: 'Get filtered, paginated transaction history' })
+  @ApiResponse({ status: 200, type: PaginatedTransactionsDto })
+  @ApiResponse({ status: 400, description: 'Invalid pagination or filter parameters' })
+  transactions(@Request() req: any, @Query() query: GetTransactionsQueryDto) {
+    return this.transactionService.getTransactions(req.user.userId, query);
   }
 
   @Get('history')

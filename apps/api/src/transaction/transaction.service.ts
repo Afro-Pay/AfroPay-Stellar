@@ -4,7 +4,7 @@ import { JobOptions, Queue } from 'bull';
 import Redis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { KycService } from '../kyc/kyc.service';
-import { TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
+import { TRANSACTION_QUEUE_NAME, TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
 
 export const HISTORY_MAX_LIMIT = 100;
 export const HISTORY_DEFAULT_LIMIT = 25;
@@ -53,6 +53,22 @@ export interface PaginatedHistory {
   total: number;
 }
 
+export interface GetTransactionsOptions {
+  page?: number;
+  limit?: number;
+  status?: string;
+  assetCode?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface PaginatedTransactions {
+  data: Awaited<ReturnType<PrismaService['transaction']['findMany']>>;
+  total: number;
+  page: number;
+  limit: number;
+}
+
 export interface SendTransferDto {
   destinationPublicKey: string;
   amount: string;
@@ -83,7 +99,7 @@ export class TransactionService {
   private idempotencyCache: any;
 
   constructor(
-    @InjectQueue('transactions') private txQueue: Queue,
+    @InjectQueue(TRANSACTION_QUEUE_NAME) private txQueue: Queue,
     private prisma: PrismaService,
     private kycService: KycService,
   ) {
@@ -270,6 +286,39 @@ export class TransactionService {
     return { data, nextCursor, total };
   }
 
+  async getTransactions(
+    userId: string,
+    options: GetTransactionsOptions = {},
+  ): Promise<PaginatedTransactions> {
+    const page = Math.max(1, options.page ?? 1);
+    const limit = Math.min(HISTORY_MAX_LIMIT, Math.max(1, options.limit ?? HISTORY_DEFAULT_LIMIT));
+    const where = {
+      userId,
+      ...(options.status ? { status: options.status as any } : {}),
+      ...(options.assetCode ? { assetCode: options.assetCode } : {}),
+      ...((options.from || options.to)
+        ? {
+            createdAt: {
+              ...(options.from ? { gte: new Date(options.from) } : {}),
+              ...(options.to ? { lte: new Date(options.to) } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const [total, data] = await Promise.all([
+      this.prisma.transaction.count({ where }),
+      this.prisma.transaction.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    return { data, total, page, limit };
+  }
+
   async getTransactionsByWallet(walletId: string) {
     return this.prisma.transaction.findMany({
       where: { walletId },
@@ -300,7 +349,7 @@ export class TransactionService {
     };
 
     if (flagged && (tx.status === 'PENDING' || tx.status === 'RETRYING')) {
-      data.status = 'REVIEW';
+      data.status = 'PENDING_REVIEW';
     }
 
     return this.prisma.transaction.update({
@@ -311,7 +360,7 @@ export class TransactionService {
 
   async updateTransactionStatus(
     txId: string,
-    status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED' | 'REVIEW',
+    status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED' | 'PENDING_REVIEW',
     stellarTxHash?: string,
   ) {
     const updated = await this.prisma.transaction.update({

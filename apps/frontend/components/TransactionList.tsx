@@ -12,43 +12,58 @@ const STATUS_COLORS: Record<string, string> = {
 
 function SkeletonRow() {
   return (
-    <li className="bg-gray-900 rounded-xl p-4 flex justify-between items-center animate-pulse">
-      <div className="flex-1 space-y-2">
-        <p className="text-sm font-medium h-4 bg-gray-700 rounded">&nbsp;</p>
-        <p className="text-xs text-gray-400 h-3 bg-gray-700 rounded w-24">&nbsp;</p>
-      </div>
-      <span className="text-xs font-semibold h-4 bg-gray-700 rounded w-16">&nbsp;</span>
-    </li>
+    <tr className="bg-gray-900 animate-pulse" aria-hidden="true">
+      <td className="rounded-l-xl p-4"><span className="block h-4 bg-gray-700 rounded w-20">&nbsp;</span></td>
+      <td className="p-4"><span className="block h-4 bg-gray-700 rounded w-32">&nbsp;</span></td>
+      <td className="p-4"><span className="block h-4 bg-gray-700 rounded w-24">&nbsp;</span></td>
+      <td className="rounded-r-xl p-4"><span className="block h-4 bg-gray-700 rounded w-16">&nbsp;</span></td>
+    </tr>
+  );
+}
+
+function TransactionTable({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full border-separate border-spacing-y-2 text-left" aria-label="Transaction history">
+        <thead className="sr-only">
+          <tr>
+            <th scope="col">Amount</th>
+            <th scope="col">Destination</th>
+            <th scope="col">Date</th>
+            <th scope="col">Status</th>
+          </tr>
+        </thead>
+        <tbody>{children}</tbody>
+      </table>
+    </div>
   );
 }
 
 export default function TransactionList({ transactions, isLoading }: { transactions: Transaction[]; isLoading?: boolean }) {
   if (isLoading) {
     return (
-      <ul className="space-y-2">
+      <TransactionTable>
         <SkeletonRow />
         <SkeletonRow />
         <SkeletonRow />
-      </ul>
+      </TransactionTable>
     );
   }
 
   if (!transactions.length) return <p className="text-gray-500 text-sm">No transactions yet.</p>;
 
   return (
-    <ul className="space-y-2" aria-label="Transaction history">
+    <TransactionTable>
       {transactions.map((tx) => (
-        <li key={tx.id} className="bg-gray-900 rounded-xl p-4 flex justify-between items-center">
-          <div>
-            <p className="text-sm font-medium">{tx.amount} {tx.assetCode}</p>
-            <p className="text-xs text-gray-400 truncate max-w-[200px]">To: {tx.destination}</p>
-            <p className="text-xs text-gray-500">{new Date(tx.createdAt).toLocaleString()}</p>
-          </div>
-          <span className={`text-xs font-semibold ${STATUS_COLORS[tx.status] ?? 'text-gray-400'}`}>
+        <tr key={tx.id} className="bg-gray-900 text-sm">
+          <td className="rounded-l-xl p-4 font-medium whitespace-nowrap">{tx.amount} {tx.assetCode}</td>
+          <td className="p-4 text-xs text-gray-400 truncate max-w-[200px]">{tx.destination}</td>
+          <td className="p-4 text-xs text-gray-500 whitespace-nowrap">{new Date(tx.createdAt).toLocaleString()}</td>
+          <td className={`rounded-r-xl p-4 text-xs font-semibold ${STATUS_COLORS[tx.status] ?? 'text-gray-400'}`}>
             {tx.status}
-          </span>
-        </li>
+          </td>
+        </tr>
       ))}
-    </ul>
+    </TransactionTable>
   );
 }

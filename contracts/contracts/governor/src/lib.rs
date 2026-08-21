@@ -3,6 +3,8 @@
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map, String};
 
 const DEFAULT_FEE_BPS: u32 = 100;
+pub const VERSION: u32 = 2;
+pub const STORAGE_VERSION: u32 = 2;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,6 +17,7 @@ pub enum DataKey {
     Votes,
     FeeBps,
     AmmPairCount,
+    StorageVersion,
 }
 
 #[contracttype]
@@ -74,6 +77,35 @@ impl Contract {
         env.storage().instance().set(&DataKey::Votes, &Map::<(u64, Address), VoteStatus>::new(&env));
         env.storage().instance().set(&DataKey::FeeBps, &DEFAULT_FEE_BPS);
         env.storage().instance().set(&DataKey::AmmPairCount, &0u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::StorageVersion, &STORAGE_VERSION);
+    }
+
+    pub fn migrate(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("contract not initialized");
+        if admin != stored_admin {
+            panic!("unauthorized admin");
+        }
+
+        let current_version: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::StorageVersion)
+            .unwrap_or(1);
+        if current_version > STORAGE_VERSION {
+            panic!("storage version is newer than this contract");
+        }
+        if current_version < STORAGE_VERSION {
+            env.storage()
+                .instance()
+                .set(&DataKey::StorageVersion, &STORAGE_VERSION);
+        }
     }
 
     pub fn set_stake(env: Env, admin: Address, voter: Address, amount: i128) {
@@ -222,6 +254,10 @@ impl Contract {
 
     pub fn get_amm_pair_count(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::AmmPairCount).unwrap_or(0)
+    }
+
+    pub fn version() -> u32 {
+        VERSION
     }
 }
 

@@ -2,8 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWalletStore } from "../store/walletStore";
 import { SimulationResult } from "../lib/api";
-
-const ASSETS = ["XLM", "USDC", "NGN"];
+import AssetPicker from "./AssetPicker";
 
 export default function SendForm() {
   const queryClient = useQueryClient();
@@ -12,6 +11,7 @@ export default function SendForm() {
     destinationPublicKey: "",
     amount: "",
     assetCode: "XLM",
+    assetIssuer: undefined as string | undefined,
     memo: "",
   });
 
@@ -38,12 +38,12 @@ export default function SendForm() {
     }
     setFormError(null);
     clearError('send');
-
     try {
       const result = await simulateTransfer({
         destinationPublicKey: form.destinationPublicKey,
         amount: form.amount,
         assetCode: form.assetCode,
+        assetIssuer: form.assetIssuer,
       });
 
       if (result.status === 'blocked') {
@@ -51,7 +51,8 @@ export default function SendForm() {
         let errMsg = "Transfer simulation blocked.";
         if (primaryIssue) {
           if (primaryIssue.code === 'MISSING_DESTINATION_TRUSTLINE') {
-            errMsg = `Destination account must trust ${form.assetCode} before receiving it.`;
+            const issuerSuffix = form.assetIssuer ? ` from ${form.assetIssuer.slice(0, 6)}…` : '';
+            errMsg = `Destination account must trust ${form.assetCode}${issuerSuffix} before receiving it.`;
           } else if (primaryIssue.code === 'NO_PATH') {
             errMsg = `No payment path exists to the destination for ${form.assetCode}.`;
           } else if (primaryIssue.code === 'INVALID_AMOUNT') {
@@ -158,6 +159,7 @@ export default function SendForm() {
         destinationPublicKey: "",
         amount: "",
         assetCode: "XLM",
+        assetIssuer: undefined,
         memo: "",
       });
       queryClient.invalidateQueries({ queryKey: ['balances'] });
@@ -256,18 +258,18 @@ export default function SendForm() {
               />
             </div>
             <div>
-              <label htmlFor="transfer-asset" className="block text-xs font-medium text-gray-300 mb-1">
-                Asset
-              </label>
-              <select
-                id="transfer-asset"
-                name="assetCode"
-                className="bg-gray-800 rounded-lg p-3 text-sm outline-none border border-gray-700/50 text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+              <AssetPicker
+                label="Asset"
                 value={form.assetCode}
-                onChange={(e) => setForm({ ...form, assetCode: e.target.value })}
-              >
-                {ASSETS.map((a) => <option key={a}>{a}</option>)}
-              </select>
+                disabled={loading || isLoadingSend}
+                onChange={(asset) =>
+                  setForm({
+                    ...form,
+                    assetCode: asset.code,
+                    assetIssuer: asset.issuer,
+                  })
+                }
+              />
             </div>
           </div>
           <div>
