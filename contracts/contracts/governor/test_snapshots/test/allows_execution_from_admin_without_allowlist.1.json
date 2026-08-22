@@ -91,17 +91,17 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "string": "Add a new AMM pair"
+                  "string": "Increase fee to 120 bps"
                 },
                 {
                   "vec": [
                     {
-                      "symbol": "AddAmmPair"
+                      "symbol": "SetFeeBps"
                     }
                   ]
                 },
                 {
-                  "u32": 1
+                  "u32": 120
                 }
               ]
             }
@@ -137,21 +137,18 @@
     ],
     [
       [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
         {
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
-              "function_name": "cast_vote",
+              "function_name": "execute",
               "args": [
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                 },
                 {
                   "u64": "1"
-                },
-                {
-                  "bool": false
                 }
               ]
             }
@@ -201,6 +198,26 @@
               "key": {
                 "ledger_key_nonce": {
                   "nonce": "1033654523790656264"
+                }
+              },
+              "durability": "temporary",
+              "val": "void"
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6311999
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "ledger_key_nonce": {
+                  "nonce": "4270020994084947596"
                 }
               },
               "durability": "temporary",
@@ -277,26 +294,6 @@
           "data": {
             "contract_data": {
               "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-              "key": {
-                "ledger_key_nonce": {
-                  "nonce": "4270020994084947596"
-                }
-              },
-              "durability": "temporary",
-              "val": "void"
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 6311999
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
               "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
               "key": "ledger_key_contract_instance",
               "durability": "persistent",
@@ -351,7 +348,7 @@
                         ]
                       },
                       "val": {
-                        "u32": 100
+                        "u32": 120
                       }
                     },
                     {
@@ -389,7 +386,7 @@
                                   "val": {
                                     "vec": [
                                       {
-                                        "symbol": "AddAmmPair"
+                                        "symbol": "SetFeeBps"
                                       }
                                     ]
                                   }
@@ -407,7 +404,7 @@
                                     "symbol": "description"
                                   },
                                   "val": {
-                                    "string": "Add a new AMM pair"
+                                    "string": "Increase fee to 120 bps"
                                   }
                                 },
                                 {
@@ -441,7 +438,7 @@
                                   "val": {
                                     "vec": [
                                       {
-                                        "symbol": "Active"
+                                        "symbol": "Executed"
                                       }
                                     ]
                                   }
@@ -451,7 +448,7 @@
                                     "symbol": "value"
                                   },
                                   "val": {
-                                    "u32": 1
+                                    "u32": 120
                                   }
                                 }
                               ]
