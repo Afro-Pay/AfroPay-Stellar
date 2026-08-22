@@ -1,4 +1,4 @@
-import { enqueueDraft, getQueuedDrafts, claimDraft, markDraftFailed, removeDraft, releaseExpiredLocks } from './offlineQueue';
+import { enqueueDraft, getQueuedDrafts, claimDraft, markDraftFailed, removeDraft, releaseExpiredLocks, requeueDraft } from './offlineQueue';
 import api from './api';
 import type { OfflineTransactionDraft } from './offlineQueue';
 
@@ -46,7 +46,9 @@ export async function drainQueue(): Promise<void> {
   await releaseExpiredLocks();
 
   const drafts = await getQueuedDrafts();
-  const pending = drafts.filter((d) => d.status === 'pending' || d.status === 'failed');
+  // Only pending drafts are eligible; failed drafts are retried manually via
+  // the UI ("Retry All") or by clearing the queue.
+  const pending = drafts.filter((d) => d.status === 'pending');
   const total = pending.length;
   let completed = 0;
   let failed = 0;
@@ -76,15 +78,15 @@ export async function drainQueue(): Promise<void> {
         completed += 1;
       } catch (error: any) {
         const status = error?.response?.status;
-        // 4xx = permanent failure (bad request, invalid destination, etc.)
-        // 5xx / network error = transient, keep for retry.
+        // 4xx = permanent failure (bad request, invalid destination, etc.) —
+        // surface in the UI for manual retry/discard.
         if (status && status >= 400 && status < 500) {
           await markDraftFailed(draft.id, error?.response?.data?.message ?? `HTTP ${status}`);
           failed += 1;
         } else {
-          // Transient error — requeue for next sync cycle.
-          await markDraftFailed(draft.id, error?.response?.data?.message ?? 'Network error');
-          failed += 1;
+          // Transient error (5xx / network) — requeue so the next drain cycle
+          // (online event or 2-minute interval) retries it.
+          await requeueDraft(draft.id, error?.response?.data?.message ?? 'Network error');
         }
       }
     }
