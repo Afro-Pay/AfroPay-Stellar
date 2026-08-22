@@ -33,6 +33,6 @@ async function bootstrap() {
   await app.listen(port);
   
   const logger = app.get(Logger);
-  logger.info(`🚀 Application running on port ${port}`);
+  logger.log(`🚀 Application running on port ${port}`);
 }
 bootstrap();

@@ -51,7 +51,9 @@ export class RedisRateLimiter {
   }
 
   async close(): Promise<void> {
-    await this.redis.quit().catch(() => undefined);
+    if (this.redis && typeof this.redis.quit === 'function') {
+      await this.redis.quit().catch(() => undefined);
+    }
   }
 
   private key(realKey: string): string {
