@@ -4,7 +4,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use warp::Filter;
 
-pub static REGISTRY: Lazy<Registry> = Lazy::new(|| Registry::new());
+pub static REGISTRY: Lazy<Registry> = Lazy::new(Registry::new);
 
 pub static QUEUE_DEPTH: Lazy<IntGauge> = Lazy::new(|| {
     let g = IntGauge::with_opts(Opts::new("queue_depth", "Redis queue depth"))

@@ -4,13 +4,28 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Semaphore;
 use tracing::{error, info};
-use crate::models::TransactionJob;
-use crate::stellar::submit_transaction;
 use crate::metrics::{QUEUE_DEPTH, TX_LATENCY_MS, TX_SUCCESS_TOTAL, TX_FAILURE_TOTAL};
+use crate::models::TransactionJob;
+use crate::stellar::{self, TESTNET_PASSPHRASE, PUBLIC_PASSPHRASE};
 
 pub async fn listen() -> Result<()> {
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into());
     let client = redis::Client::open(redis_url)?;
+
+    let horizon_url = Arc::new(
+        std::env::var("HORIZON_URL")
+            .unwrap_or_else(|_| "https://horizon-testnet.stellar.org".to_string()),
+    );
+    let network_passphrase =
+        if std::env::var("STELLAR_NETWORK").unwrap_or_default() == "mainnet" {
+            PUBLIC_PASSPHRASE
+        } else {
+            TESTNET_PASSPHRASE
+        };
+    let source_secret = Arc::new(
+        std::env::var("USER_SECRET_KEY").expect("USER_SECRET_KEY must be set"),
+    );
+    let http_client = reqwest::Client::new();
 
     info!("Listening on Redis queue: stellar_jobs");
 
@@ -38,33 +53,35 @@ pub async fn listen() -> Result<()> {
         if let Some((_, payload)) = result {
             match serde_json::from_str::<TransactionJob>(&payload) {
                 Ok(job) => {
-                    let client_clone = client.clone();
                     let permit = semaphore.clone().acquire_owned().await.unwrap();
-                    info!("Dispatching job: {}", job.tx_id);
+                    let http_client = http_client.clone();
+                    let horizon_url = horizon_url.clone();
+                    let source_secret = source_secret.clone();
+                    info!("Dispatching job: {}", job.id);
 
                     tokio::spawn(async move {
                         let start = Instant::now();
-                        // Each task creates its own connection for safety
-                        match client_clone.get_async_connection().await {
-                            Ok(mut _task_conn) => {
-                                match submit_transaction(&job).await {
-                                    Ok(hash) => {
-                                        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                                        TX_LATENCY_MS.observe(elapsed_ms);
-                                        TX_SUCCESS_TOTAL.inc();
-                                        info!("Job {} succeeded: {}", job.tx_id, hash);
-                                    }
-                                    Err(e) => {
-                                        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                                        TX_LATENCY_MS.observe(elapsed_ms);
-                                        TX_FAILURE_TOTAL.inc();
-                                        error!("Job {} failed: {}", job.tx_id, e);
-                                    }
-                                }
+                        let job_id = job.id.clone();
+                        match stellar::submit_transaction(
+                            &http_client,
+                            &horizon_url,
+                            &job,
+                            &source_secret,
+                            network_passphrase,
+                        )
+                        .await
+                        {
+                            Ok(hash) => {
+                                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                                TX_LATENCY_MS.observe(elapsed_ms);
+                                TX_SUCCESS_TOTAL.inc();
+                                info!("Job {} succeeded: {}", job_id, hash);
                             }
                             Err(e) => {
+                                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                                TX_LATENCY_MS.observe(elapsed_ms);
                                 TX_FAILURE_TOTAL.inc();
-                                error!("Job {} - failed to get task connection: {}", job.tx_id, e);
+                                error!("Job {} failed: {}", job_id, e);
                             }
                         }
                         drop(permit);
