@@ -7,6 +7,8 @@ import { TransactionDlqService } from './transaction-dlq.service';
 import { TransactionProcessor } from './transaction.processor';
 import { TransferSimulationService } from './transfer-simulation.service';
 import { FraudService } from './fraud.service';
+import { ComplianceService } from './compliance.service';
+import { ComplianceController } from './compliance.controller';
 import { AdminGuard } from '../admin/admin.guard';
 import { PrismaModule } from '../prisma/prisma.module';
 import { WalletModule } from '../wallet/wallet.module';
@@ -34,8 +36,9 @@ import { AuditModule } from '../audit/audit.module';
     TransactionDlqService,
     TransferSimulationService,
     FraudService,
+    ComplianceService,
     AdminGuard,
   ],
-  controllers: [TransactionController, TransactionDlqController],
+  controllers: [TransactionController, TransactionDlqController, ComplianceController],
 })
 export class TransactionModule {}
