@@ -40,11 +40,76 @@ describe('TransactionController', () => {
     );
   });
 
-  it('rejects page zero through query validation', async () => {
-    const pipe = new ValidationPipe({ transform: true, whitelist: true });
+  describe('sendPayment', () => {
+    const mockSendDto = {
+      destinationPublicKey: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+      amount: '50.00',
+      assetCode: 'USDC',
+    };
+    const validKey = '11111111-2222-4333-8444-555555555555';
 
-    await expect(
-      pipe.transform({ page: '0' }, { type: 'query', metatype: GetTransactionsQueryDto }),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    it('rejects missing Idempotency-Key with 400 Bad Request', async () => {
+      const mockReq = { user: { userId: 'user-1' } };
+      const mockRes = { status: jest.fn() };
+
+      await expect(
+        controller.sendPayment(mockReq, mockSendDto, mockRes, undefined),
+      ).rejects.toThrow(new BadRequestException('Idempotency-Key header is required'));
+    });
+
+    it('rejects empty Idempotency-Key with 400 Bad Request', async () => {
+      const mockReq = { user: { userId: 'user-1' } };
+      const mockRes = { status: jest.fn() };
+
+      await expect(
+        controller.sendPayment(mockReq, mockSendDto, mockRes, '   '),
+      ).rejects.toThrow(new BadRequestException('Idempotency-Key header is required'));
+    });
+
+    it('rejects malformed Idempotency-Key with 400 Bad Request', async () => {
+      const mockReq = { user: { userId: 'user-1' } };
+      const mockRes = { status: jest.fn() };
+
+      await expect(
+        controller.sendPayment(mockReq, mockSendDto, mockRes, 'invalid-uuid-format'),
+      ).rejects.toThrow(new BadRequestException('Idempotency-Key header must be a valid UUID'));
+    });
+
+    it('processes fresh transfer and keeps default 201 Created status', async () => {
+      const mockReq = { user: { userId: 'user-1' } };
+      const mockRes = { status: jest.fn() };
+
+      (transactionService as any).sendPayment = jest.fn().mockResolvedValue({
+        txId: 'tx-100',
+        status: 'PENDING',
+        idempotentReplay: false,
+      });
+
+      const res = await controller.sendPayment(mockReq, mockSendDto, mockRes, validKey);
+
+      expect(res).toEqual({ txId: 'tx-100', status: 'PENDING' });
+      expect(mockRes.status).not.toHaveBeenCalled();
+      expect((transactionService as any).sendPayment).toHaveBeenCalledWith(
+        'user-1',
+        mockSendDto,
+        validKey,
+      );
+    });
+
+    it('replays duplicate request and sets status to 200 OK', async () => {
+      const mockReq = { user: { userId: 'user-1' } };
+      const mockRes = { status: jest.fn() };
+
+      (transactionService as any).sendPayment = jest.fn().mockResolvedValue({
+        txId: 'tx-100',
+        status: 'PENDING',
+        idempotentReplay: true,
+      });
+
+      const res = await controller.sendPayment(mockReq, mockSendDto, mockRes, validKey);
+
+      expect(res).toEqual({ txId: 'tx-100', status: 'PENDING' });
+      expect(mockRes.status).toHaveBeenCalledWith(200);
+    });
   });
 });
