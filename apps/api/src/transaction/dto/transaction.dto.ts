@@ -160,12 +160,25 @@ export class PaginatedHistoryDto {
 }
 
 export class GetTransactionsQueryDto {
+  @ApiPropertyOptional({
+    description: 'Page number for pagination',
+    example: 1,
+    minimum: 1,
+    default: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   page = 1;
 
+  @ApiPropertyOptional({
+    description: `Number of records per page. Maximum ${HISTORY_MAX_LIMIT}.`,
+    example: HISTORY_DEFAULT_LIMIT,
+    default: HISTORY_DEFAULT_LIMIT,
+    minimum: 1,
+    maximum: HISTORY_MAX_LIMIT,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -173,26 +186,62 @@ export class GetTransactionsQueryDto {
   @Max(HISTORY_MAX_LIMIT)
   limit = HISTORY_DEFAULT_LIMIT;
 
+  @ApiPropertyOptional({
+    description: 'Filter by transaction status',
+    enum: ['PENDING', 'RETRYING', 'SUCCESS', 'FAILED', 'PENDING_REVIEW'],
+    example: 'SUCCESS',
+  })
   @IsOptional()
   @IsEnum(['PENDING', 'RETRYING', 'SUCCESS', 'FAILED', 'PENDING_REVIEW'])
   status?: string;
 
+  @ApiPropertyOptional({
+    description: 'Filter by asset code',
+    example: 'XLM',
+  })
   @IsOptional()
   @IsString()
   assetCode?: string;
 
+  @ApiPropertyOptional({
+    description: 'Start date filter (ISO 8601 format)',
+    example: '2024-01-01T00:00:00.000Z',
+  })
   @IsOptional()
   @IsDateString()
   from?: string;
 
+  @ApiPropertyOptional({
+    description: 'End date filter (ISO 8601 format)',
+    example: '2024-12-31T23:59:59.999Z',
+  })
   @IsOptional()
   @IsDateString()
   to?: string;
 }
 
 export class PaginatedTransactionsDto {
+  @ApiProperty({
+    description: 'Array of transaction records',
+    type: [TransactionResponseDto],
+  })
   data: TransactionResponseDto[];
+
+  @ApiProperty({
+    description: 'Total number of transactions',
+    example: 150,
+  })
   total: number;
+
+  @ApiProperty({
+    description: 'Current page number',
+    example: 1,
+  })
   page: number;
+
+  @ApiProperty({
+    description: 'Number of records per page',
+    example: 25,
+  })
   limit: number;
 }
