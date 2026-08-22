@@ -13,10 +13,3 @@ pub struct TransactionJob {
     pub requires_cosign: bool,  // New field
     pub threshold_usd: Option<f64>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SigningResult {
-    pub transaction_hash: String,
-    pub signatures_applied: usize,
-    pub required_signatures: usize,
-}
