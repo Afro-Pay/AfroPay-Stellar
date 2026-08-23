@@ -1,7 +1,6 @@
 import { Controller, Get, Param, Post, Request, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AdminGuard } from './admin.guard';
 import { AdminComplianceService } from './admin.service';
 
 type AdminRequest = { user: { userId: string; role: string } };
@@ -9,7 +8,7 @@ type AdminRequest = { user: { userId: string; role: string } };
 @ApiTags('admin')
 @ApiBearerAuth('JWT-auth')
 @Controller('admin/users')
-@UseGuards(JwtAuthGuard, AdminGuard)
+@UseGuards(JwtAuthGuard)
 export class AdminController {
   constructor(private readonly compliance: AdminComplianceService) {}
 
