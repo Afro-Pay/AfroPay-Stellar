@@ -14,6 +14,7 @@ import { AuthModule } from '../auth/auth.module';
 import { KycModule } from '../kyc/kyc.module';
 import { AnchorModule } from '../anchor/anchor.module';
 import { AuditModule } from '../audit/audit.module';
+import { RedisLockService } from '../common/lock/lock.service';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { AuditModule } from '../audit/audit.module';
     TransferSimulationService,
     FraudService,
     AdminGuard,
+    RedisLockService,
   ],
   controllers: [TransactionController, TransactionDlqController],
 })
