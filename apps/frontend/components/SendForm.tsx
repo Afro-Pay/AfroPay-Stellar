@@ -25,25 +25,23 @@ export default function SendForm() {
   const [lastSimulationTime, setLastSimulationTime] = useState<number>(0);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [offlineCount, setOfflineCount] = useState(0);
-  const [isOffline, setIsOffline] = useState(false);
+  const [addressConfirmation, setAddressConfirmation] = useState('');
 
+  // A malicious clipboard-hijacking extension can silently swap a copied
+  // Stellar address for its own. Requiring the user to actively retype the
+  // last 4 characters of whatever currently sits in the destination field
+  // forces a deliberate look at the real value about to be submitted.
+  const destinationSuffix = form.destinationPublicKey.trim().slice(-4).toUpperCase();
+  const isAddressConfirmed =
+    destinationSuffix.length === 4 &&
+    addressConfirmation.trim().toUpperCase() === destinationSuffix;
+
+  // Re-arm the confirmation whenever the destination actually changes, but
+  // not on every keystroke of an unrelated field and not on the periodic
+  // quote auto-refresh (same address, just a fresher rate).
   useEffect(() => {
-    setIsOffline(!navigator.onLine);
-    const handleOnline = () => setIsOffline(false);
-    const handleOffline = () => setIsOffline(true);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    getPendingCount().then(setOfflineCount);
-    const interval = setInterval(() => getPendingCount().then(setOfflineCount), 5_000);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-      clearInterval(interval);
-    };
-  }, []);
+    setAddressConfirmation('');
+  }, [form.destinationPublicKey]);
 
   const previewHeaderRef = useRef<HTMLHeadingElement>(null);
   const amountInputRef = useRef<HTMLInputElement>(null);
@@ -160,7 +158,7 @@ export default function SendForm() {
     if (isOffline) return; // Offline uses the dedicated "Queue Transfer Offline" button.
     if (step === 'edit') {
       handleSimulate();
-    } else if (step === 'preview' && simulation && countdown > 0) {
+    } else if (step === 'preview' && simulation && countdown > 0 && isAddressConfirmed) {
       handleConfirm();
     }
   };
@@ -415,6 +413,13 @@ export default function SendForm() {
 
           <div className="space-y-3 bg-gray-800/40 border border-gray-800 rounded-xl p-4 text-sm">
             <div className="flex justify-between items-baseline border-b border-gray-800/50 pb-2">
+              <span className="text-gray-400 text-xs">Destination</span>
+              <span className="font-mono text-xs text-gray-200" title={form.destinationPublicKey}>
+                {form.destinationPublicKey.slice(0, 4)}…{form.destinationPublicKey.slice(-4)}
+              </span>
+            </div>
+
+            <div className="flex justify-between items-baseline border-b border-gray-800/50 pb-2">
               <span className="text-gray-400 text-xs">Sending Amount</span>
               <span className="font-medium text-white">{form.amount} {form.assetCode}</span>
             </div>
@@ -423,6 +428,13 @@ export default function SendForm() {
               <span className="text-gray-400 text-xs">Estimated Destination</span>
               <span className="font-semibold text-emerald-400 text-base">
                 {simulation.estimatedDestinationAmount} {form.assetCode}
+              </span>
+            </div>
+
+            <div className="flex justify-between items-baseline border-b border-gray-800/50 pb-2">
+              <span className="text-gray-400 text-xs">Fee</span>
+              <span className="font-medium text-gray-200">
+                {simulation.path.length > 1 ? 'Included in FX rate above' : 'No fee — same-asset transfer'}
               </span>
             </div>
 
@@ -450,6 +462,29 @@ export default function SendForm() {
             )}
           </div>
 
+          {countdown > 0 && (
+            <div>
+              <label htmlFor="destination-confirm" className="block text-xs font-medium text-gray-300 mb-1">
+                Confirm destination — type the last 4 characters
+              </label>
+              <input
+                id="destination-confirm"
+                name="destinationConfirm"
+                className="w-full bg-gray-800 rounded-lg p-3 text-sm font-mono uppercase tracking-widest outline-none border border-gray-700/50 text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                placeholder={destinationSuffix || '····'}
+                maxLength={4}
+                value={addressConfirmation}
+                onChange={(e) => setAddressConfirmation(e.target.value)}
+                autoComplete="off"
+                aria-describedby="destination-confirm-hint"
+              />
+              <p id="destination-confirm-hint" className="text-xs text-gray-500 mt-1">
+                Destination ends in <span className="font-mono text-gray-300">{destinationSuffix}</span>. Retyping it
+                guards against a clipboard extension silently swapping the address you pasted.
+              </p>
+            </div>
+          )}
+
           <div className="flex gap-2">
             <button
               type="button"
@@ -470,7 +505,7 @@ export default function SendForm() {
             ) : (
               <button
                 type="submit"
-                disabled={isSubmitting || isLoadingSend}
+                disabled={isSubmitting || isLoadingSend || !isAddressConfirmed}
                 aria-busy={isSubmitting || isLoadingSend}
                 className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] transition-all text-white rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300 shadow-md shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
@@ -488,6 +523,11 @@ export default function SendForm() {
               </button>
             )}
           </div>
+          {countdown > 0 && !isAddressConfirmed && (
+            <p className="text-xs text-amber-400/90 text-center -mt-1">
+              Type the last 4 characters of the destination address above to enable sending.
+            </p>
+          )}
         </div>
       )}
 
