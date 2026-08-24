@@ -94,6 +94,26 @@ export const envValidationSchema = Joi.object({
       'any.required': '"STELLAR_HORIZON_URL" is required',
     }),
 
+  STELLAR_HORIZON_URLS: Joi.string()
+    .optional()
+    .custom((value, helpers) => validateWeightedUrlList(value, helpers, 'STELLAR_HORIZON_URLS')),
+
+  SOROBAN_RPC_URL: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .optional(),
+
+  SOROBAN_RPC_URLS: Joi.string()
+    .optional()
+    .custom((value, helpers) => validateWeightedUrlList(value, helpers, 'SOROBAN_RPC_URLS')),
+
+  RPC_HEALTH_INTERVAL_MS: Joi.number().integer().min(1000).default(10000),
+
+  RPC_REQUEST_TIMEOUT_MS: Joi.number().integer().min(250).default(5000),
+
+  RPC_RATE_LIMIT_COOLDOWN_MS: Joi.number().integer().min(1000).default(60000),
+
+  RPC_MAX_BLOCK_LAG: Joi.number().integer().min(0).default(3),
+
   ANCHOR_USDC_URL: Joi.string()
     .uri({ scheme: ['http', 'https'] })
     .required()
@@ -114,3 +134,27 @@ export const envValidationSchema = Joi.object({
   .with('KMS_KEY_ID', 'AWS_REGION')
   .with('SIGNER_URL', 'SIGNER_AUTH_TOKEN')
   .with('SIGNER_AUTH_TOKEN', 'SIGNER_URL');
+
+function validateWeightedUrlList(value: string, helpers: Joi.CustomHelpers, name: string) {
+  const entries = value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  for (const entry of entries) {
+    const [url, weight] = entry.split('|').map((part) => part.trim());
+    const validation = Joi.string().uri({ scheme: ['http', 'https'] }).validate(url);
+    if (validation.error) {
+      return helpers.message({
+        custom: `"${name}" contains an invalid URL: ${url}`,
+      });
+    }
+    if (weight && (!Number.isFinite(Number(weight)) || Number(weight) <= 0)) {
+      return helpers.message({
+        custom: `"${name}" weights must be positive numbers`,
+      });
+    }
+  }
+
+  return value;
+}

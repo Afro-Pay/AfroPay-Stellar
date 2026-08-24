@@ -135,6 +135,42 @@ export class PrometheusService implements OnModuleInit {
   });
 
   // ---------------------------------------------------------------------------
+  // Stellar RPC provider metrics
+  // ---------------------------------------------------------------------------
+
+  /** Provider health by RPC kind and endpoint (1 = routable, 0 = degraded). */
+  readonly rpcEndpointHealth = new Gauge({
+    name: 'afropay_rpc_endpoint_health',
+    help: 'Stellar RPC endpoint health, 1 when healthy and routable',
+    labelNames: ['kind', 'endpoint_id', 'url'],
+    registers: [this.registry],
+  });
+
+  /** Last observed RPC provider latency in milliseconds. */
+  readonly rpcEndpointLatencyMs = new Gauge({
+    name: 'afropay_rpc_endpoint_latency_ms',
+    help: 'Last observed latency for each Stellar RPC endpoint in milliseconds',
+    labelNames: ['kind', 'endpoint_id'],
+    registers: [this.registry],
+  });
+
+  /** Last observed ledger height for each RPC provider. */
+  readonly rpcEndpointBlockHeight = new Gauge({
+    name: 'afropay_rpc_endpoint_block_height',
+    help: 'Last observed ledger or block height for each Stellar RPC endpoint',
+    labelNames: ['kind', 'endpoint_id'],
+    registers: [this.registry],
+  });
+
+  /** Alert flag when no provider of a kind is routable. */
+  readonly rpcAllEndpointsDegraded = new Gauge({
+    name: 'afropay_rpc_all_endpoints_degraded',
+    help: 'Set to 1 when every configured RPC endpoint of a kind is degraded',
+    labelNames: ['kind'],
+    registers: [this.registry],
+  });
+
+  // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
 
