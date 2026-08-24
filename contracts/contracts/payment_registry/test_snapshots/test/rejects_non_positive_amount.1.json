@@ -83,18 +83,6 @@
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                       }
-                    },
-                    {
-                      "key": {
-                        "vec": [
-                          {
-                            "symbol": "Payments"
-                          }
-                        ]
-                      },
-                      "val": {
-                        "map": []
-                      }
                     }
                   ]
                 }

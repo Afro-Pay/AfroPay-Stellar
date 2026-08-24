@@ -1,0 +1,43 @@
+# Run this Job AFTER the new api/rust-worker Deployments have finished
+# rolling out AND every old pod is confirmed drained (no pod from the
+# previous release still serving traffic or processing queue jobs against
+# the old schema assumptions).
+#
+# It applies any migration classified "breaking" that was deferred by
+# migration-job-pre-deploy.yaml. If nothing was deferred, it is a no-op.
+# See docs/zero-downtime-migrations.md.
+#
+#   kubectl rollout status deployment/api -n afropay
+#   kubectl rollout status deployment/rust-worker -n afropay
+#   kubectl apply -f migration-job-post-deploy.yaml
+#   kubectl wait --for=condition=complete --timeout=300s job/api-migration-post-deploy -n afropay
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Job names must be unique. Append the release/Git SHA when applying this
+  # manifest (e.g. `api-migration-post-$GIT_SHA`) so re-running a deploy
+  # doesn't collide with a completed Job from the previous release.
+  name: api-migration-post-deploy
+  namespace: afropay
+  labels:
+    app: api-migration
+    phase: post-deploy
+spec:
+  template:
+    metadata:
+      labels:
+        app: api-migration
+        phase: post-deploy
+    spec:
+      containers:
+      - name: migration
+        image: registry.example.com/afropay-stellar/api:latest # Replace with target tag for release; must match the image just rolled out
+        command: ["/bin/sh", "/app/scripts/migrate-post-deploy.sh"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: afropay-secrets
+              key: DATABASE_URL
+      restartPolicy: OnFailure
+  backoffLimit: 4
