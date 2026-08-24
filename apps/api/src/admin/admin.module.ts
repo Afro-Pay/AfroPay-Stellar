@@ -5,7 +5,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { JwtStrategy } from '../auth/jwt.strategy';
 import { AdminController } from './admin.controller';
-import { AdminGuard } from './admin.guard';
+
 import { AdminComplianceService } from './admin.service';
 
 @Module({
@@ -15,7 +15,7 @@ import { AdminComplianceService } from './admin.service';
     JwtModule.register({ secret: process.env.JWT_SECRET }),
   ],
   controllers: [AdminController],
-  providers: [AdminComplianceService, AdminGuard, JwtAuthGuard, JwtStrategy],
+  providers: [AdminComplianceService, JwtAuthGuard, JwtStrategy],
   exports: [AdminComplianceService],
 })
 export class AdminModule {}

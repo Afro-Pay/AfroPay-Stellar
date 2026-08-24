@@ -8,15 +8,13 @@ import { TRANSACTION_QUEUE_NAME, TRANSACTION_DLQ_QUEUE_NAME } from './transactio
 import { TransactionProcessor } from './transaction.processor';
 import { TransferSimulationService } from './transfer-simulation.service';
 import { FraudService } from './fraud.service';
-import { ComplianceService } from './compliance.service';
-import { ComplianceController } from './compliance.controller';
-import { AdminGuard } from '../admin/admin.guard';
 import { PrismaModule } from '../prisma/prisma.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AuthModule } from '../auth/auth.module';
 import { KycModule } from '../kyc/kyc.module';
 import { AnchorModule } from '../anchor/anchor.module';
 import { AuditModule } from '../audit/audit.module';
+import { RedisLockService } from '../common/lock/lock.service';
 
 @Module({
   imports: [
@@ -39,6 +37,7 @@ import { AuditModule } from '../audit/audit.module';
     FraudService,
     ComplianceService,
     AdminGuard,
+    RedisLockService,
   ],
   controllers: [TransactionController, TransactionDlqController, ComplianceController],
 })
