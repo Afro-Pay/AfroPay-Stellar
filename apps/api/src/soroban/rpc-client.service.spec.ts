@@ -94,4 +94,22 @@ describe('RpcClientService', () => {
     expect(snapshot[0].status).toBe('rate_limited');
     expect(snapshot[0].rateLimitedUntil?.toISOString()).toBe('2026-08-24T12:01:00.000Z');
   });
+
+  it('distributes traffic with a latency-weighted preference for faster endpoints', async () => {
+    const service = new RpcClientService();
+    (service as any).markSuccess(service.getSnapshot('soroban')[0], 10);
+    (service as any).markSuccess(service.getSnapshot('soroban')[1], 100);
+
+    const selections: string[] = [];
+    for (let index = 0; index < 10; index += 1) {
+      await (service as any).withEndpoint('soroban', async (endpoint) => {
+        selections.push(endpoint.id);
+        return endpoint.id;
+      });
+    }
+
+    const fastSelections = selections.filter((id) => id === 'soroban-1').length;
+    const slowSelections = selections.filter((id) => id === 'soroban-2').length;
+    expect(fastSelections).toBeGreaterThan(slowSelections);
+  });
 });

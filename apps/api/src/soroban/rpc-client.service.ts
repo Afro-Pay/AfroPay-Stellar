@@ -21,6 +21,7 @@ export interface RpcEndpointState extends RpcEndpointConfig {
   lastError: string | null;
   consecutiveFailures: number;
   rateLimitedUntil: Date | null;
+  routingBalance: number;
 }
 
 interface RankedEndpoint {
@@ -38,7 +39,6 @@ export class RpcClientService implements OnModuleInit, OnModuleDestroy {
   private readonly requestTimeoutMs: number;
   private readonly rateLimitCooldownMs: number;
   private monitor?: NodeJS.Timeout;
-  private cursor = 0;
 
   constructor(private readonly prometheus?: PrometheusService) {
     this.maxBlockLag = this.readNumber('RPC_MAX_BLOCK_LAG', 3);
@@ -57,6 +57,7 @@ export class RpcClientService implements OnModuleInit, OnModuleDestroy {
         lastError: null,
         consecutiveFailures: 0,
         rateLimitedUntil: null,
+        routingBalance: 0,
       });
     }
   }
@@ -148,15 +149,31 @@ export class RpcClientService implements OnModuleInit, OnModuleDestroy {
       .map((endpoint) => ({
         endpoint,
         score: this.effectiveWeight(endpoint),
-      }))
-      .sort((a, b) => b.score - a.score);
+      }));
 
     if (ranked.length <= 1) {
       return ranked;
     }
 
-    const rotation = this.cursor++ % ranked.length;
-    return [...ranked.slice(rotation), ...ranked.slice(0, rotation)];
+    const totalScore = ranked.reduce((sum, candidate) => sum + candidate.score, 0);
+    for (const candidate of ranked) {
+      candidate.endpoint.routingBalance += candidate.score;
+    }
+
+    const selected = ranked.reduce((best, candidate) =>
+      candidate.endpoint.routingBalance > best.endpoint.routingBalance ? candidate : best,
+    );
+    selected.endpoint.routingBalance -= totalScore;
+
+    return ranked.sort((a, b) => {
+      if (a.endpoint.id === selected.endpoint.id) {
+        return -1;
+      }
+      if (b.endpoint.id === selected.endpoint.id) {
+        return 1;
+      }
+      return b.score - a.score;
+    });
   }
 
   private isRoutable(endpoint: RpcEndpointState, highestBlock: number | null): boolean {
