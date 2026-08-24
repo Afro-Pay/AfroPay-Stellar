@@ -1,8 +1,6 @@
 use anyhow::Result;
 use redis::AsyncCommands;
 use tracing::{error, info};
-use crate::models::TransactionJob;
-use crate::stellar::submit_transaction;
 use crate::metrics::{QUEUE_DEPTH, TX_LATENCY_MS, TX_SUCCESS_TOTAL, TX_FAILURE_TOTAL};
 use crate::lock_manager::LockManager;
 
@@ -32,7 +30,6 @@ pub async fn listen() -> Result<()> {
         if let Some((_, payload)) = result {
             match serde_json::from_str::<TransactionJob>(&payload) {
                 Ok(job) => {
-                    let client_clone = client.clone();
                     let permit = semaphore.clone().acquire_owned().await.unwrap();
                     info!("Dispatching job: {}", job.id);
 
@@ -66,6 +63,8 @@ pub async fn listen() -> Result<()> {
                                 }
                             }
                             Err(e) => {
+                                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                                TX_LATENCY_MS.observe(elapsed_ms);
                                 TX_FAILURE_TOTAL.inc();
                                 error!("Job {} - failed to get task connection: {}", job.id, e);
                             }

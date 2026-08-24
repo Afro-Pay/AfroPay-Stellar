@@ -1,5 +1,8 @@
+mod env;
+#[cfg(test)]
+mod integration_tests;
+mod metrics;
 mod models;
-mod stellar;
 mod queue;
 mod lock_manager;
 
