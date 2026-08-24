@@ -71,7 +71,7 @@ export class TransactionProcessor {
     // state (e.g. job retried after SUCCESS/FAILED, or concurrent duplicate job
     // that slipped through before BullMQ deduplication kicked in).
     if (['SUCCESS', 'FAILED', 'PENDING_REVIEW'].includes(transaction.status)) {
-      this.logger.info({
+      this.logger.log({
         event: 'transaction_job_skipped_terminal',
         txId,
         status: transaction.status,
@@ -111,7 +111,7 @@ export class TransactionProcessor {
       assetCode,
     });
 
-    this.logger.info({
+    this.logger.log({
       event: 'transaction_initiated',
       userId,
       transactionId: transaction.id,
@@ -139,6 +139,8 @@ export class TransactionProcessor {
         data: {
           status: 'SUCCESS',
           stellarTxHash: result.hash,
+          ...(fraudResult.riskScore !== undefined ? { riskScore: fraudResult.riskScore } : {}),
+          ...(fraudResult.flagged !== undefined ? { flagged: fraudResult.flagged } : {}),
         },
       });
 
@@ -149,7 +151,7 @@ export class TransactionProcessor {
         amount,
       });
 
-      this.logger.info({
+      this.logger.log({
         event: 'transaction_completed',
         userId,
         transactionId: transaction.id,
@@ -201,7 +203,7 @@ export class TransactionProcessor {
     amount: string,
     assetCode: string,
     destination: string,
-  ): Promise<{ blocked: boolean; updatedTx?: any }> {
+  ): Promise<{ blocked: boolean; updatedTx?: any; riskScore?: number; flagged?: boolean }> {
     let riskScore: number;
     let flagged: boolean;
     let reasons: string[];
@@ -295,13 +297,13 @@ export class TransactionProcessor {
       data: { riskScore, flagged },
     });
 
-    this.logger.info({
+    this.logger.log({
       event: 'transaction_fraud_check_passed',
       transactionId: transaction.id,
       riskScore,
     });
 
-    return { blocked: false };
+    return { blocked: false, riskScore, flagged };
   }
 
   private async processOnChain(transaction: any): Promise<{ hash: string }> {
