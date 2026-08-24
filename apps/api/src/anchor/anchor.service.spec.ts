@@ -14,6 +14,33 @@ describe('AnchorService', () => {
 
   beforeEach(() => { service = new AnchorService(); });
 
+  describe('SEP-10 security audit', () => {
+    it('rejects expired SEP-10 JWTs before trusting them', async () => {
+      const expiredPayload = {
+        sub: 'GDTPQ4E7V4R5H3YQG7F5V4N6TQ2JMWQ56N2QJ2Q5R2T7A6QX2QYLLM',
+        exp: Math.floor(Date.now() / 1000) - 5,
+        iat: Math.floor(Date.now() / 1000) - 30,
+      };
+      const token = `header.${Buffer.from(JSON.stringify(expiredPayload)).toString('base64url')}.sig`;
+
+      await expect(service.verifySep10Token(token)).rejects.toThrow(/expired|exp/i);
+    });
+
+    it('rejects replayed challenge nonces with a TTL-backed single-use store', async () => {
+      const nonce = await service.issueChallengeNonce('GAAA', 60);
+      await expect(service.consumeChallengeNonce('GAAA', nonce, 60)).resolves.toBeUndefined();
+      await expect(service.consumeChallengeNonce('GAAA', nonce, 60)).rejects.toThrow(/already used|nonce/i);
+    });
+
+    it('rejects an anchor signing key that does not match the cached stellar.toml key', async () => {
+      (service as any).cachedAnchorSigningKey = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+      await expect(
+        service.assertAnchorSigningKeyMatches('GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'),
+      ).rejects.toThrow(/signing key|stellar.toml/i);
+    });
+  });
+
   it('returns a known FX rate for USD-NGN', async () => {
     const result = await service.getFxRate('USD', 'NGN');
     expect(result.rate).toBe(1550);

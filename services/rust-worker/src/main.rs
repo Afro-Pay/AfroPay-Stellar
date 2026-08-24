@@ -1,17 +1,16 @@
 mod models;
 mod stellar;
 mod queue;
-mod db;
-mod sse;
-mod metrics;
+mod lock_manager;
 
 use dotenv::dotenv;
 use std::env;
-use std::sync::Arc;
-use tracing::info;
+use redis::Client;
+use stellar_sdk::Keypair;
 use stellar::StellarService;
 use models::TransactionJob;
 use queue::QueueService;
+use lock_manager::LockManager;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -66,6 +65,13 @@ async fn process_job(
     job: TransactionJob,
     db_pool: &Arc<sqlx::PgPool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+    let lock_manager = LockManager::new(Client::open(redis_url)?);
+    let lock = lock_manager
+        .acquire(format!("lock:escrow:{}", job.id))
+        .await?;
+
+    // Load user's keypair (in production, securely retrieve from vault)
     let user_secret = env::var("USER_SECRET_KEY")
         .expect("USER_SECRET_KEY must be set");
     let user_keypair = stellar_sdk::Keypair::from_secret(&user_secret)?;
@@ -98,16 +104,12 @@ async fn process_job(
     ).await?;
 
     let hash = stellar_service.submit_transaction(&transaction).await?;
+    
+    println!("✅ Transaction submitted successfully!");
+    println!("   Hash: {}", hash);
+    println!("   Signatures: {}", if requires_cosign { 2 } else { 1 });
 
-    // Store the transaction hash for SSE matching
-    db::store_stellar_tx_hash(db_pool, &job.id, &hash).await?;
-
-    tracing::info!(
-        status = "submitting",
-        stellar_tx_hash = %hash,
-        job_id = %job.id,
-        "Transaction submitted, awaiting confirmation via SSE"
-    );
-
+    lock.release().await?;
+    
     Ok(())
 }
