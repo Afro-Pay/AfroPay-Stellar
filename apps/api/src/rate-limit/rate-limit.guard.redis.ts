@@ -88,11 +88,8 @@ export class RateLimitGuardRedis implements CanActivate {
     const userId = request?.user?.userId ?? request?.user?.sub;
     if (userId) return `user:${userId}`;
 
-    const forwardedFor = request?.headers?.["x-forwarded-for"];
-    if (typeof forwardedFor === "string" && forwardedFor.trim()) {
-      return `ip:${forwardedFor.split(",")[0].trim()}`;
-    }
-
+    // `request.ip` honours Express's configured trusted-proxy boundary. Raw
+    // forwarding headers are attacker-controlled and must not select buckets.
     return `ip:${request?.ip ?? request?.socket?.remoteAddress ?? "unknown"}`;
   }
 }

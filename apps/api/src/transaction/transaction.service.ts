@@ -4,7 +4,9 @@ import { JobOptions, Queue } from 'bull';
 import Redis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { KycService } from '../kyc/kyc.service';
-import { TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
+import { SorobanService } from '../soroban/soroban.service';
+import { SendDto } from './dto';
+import { TRANSACTION_QUEUE_NAME, TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
 
 export const HISTORY_MAX_LIMIT = 100;
 export const HISTORY_DEFAULT_LIMIT = 25;
@@ -53,12 +55,26 @@ export interface PaginatedHistory {
   total: number;
 }
 
-export interface SendTransferDto {
-  destinationPublicKey: string;
-  amount: string;
-  assetCode: string;
-  assetIssuer?: string;
-  memo?: string;
+export interface GetTransactionsOptions {
+  page?: number;
+  limit?: number;
+  status?: string;
+  assetCode?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface PaginatedTransactions {
+  data: Awaited<ReturnType<PrismaService['transaction']['findMany']>>;
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface InitiateTransferDto {
+  recipientCountry: string;
+  fiatAmount: number;
+  fiatCurrency: string;
 }
 
 export interface SendTransferResponse {
@@ -83,9 +99,10 @@ export class TransactionService {
   private idempotencyCache: any;
 
   constructor(
-    @InjectQueue('transactions') private txQueue: Queue,
+    @InjectQueue(TRANSACTION_QUEUE_NAME) private txQueue: Queue,
     private prisma: PrismaService,
     private kycService: KycService,
+    private soroban: SorobanService,
   ) {
     const redisUrl = process.env.REDIS_URL;
     this.idempotencyCache =
@@ -108,7 +125,7 @@ export class TransactionService {
    */
   async sendTransfer(
     userId: string,
-    dto: SendTransferDto,
+    dto: SendDto,
     idempotencyKey?: string,
   ): Promise<SendTransferResult> {
     if (idempotencyKey) {
@@ -120,7 +137,7 @@ export class TransactionService {
     await this.kycService.assertWithinDailyLimit(userId, amountUsd);
 
     // Resolve the wallet FK – every transfer must originate from the user's wallet.
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+    const wallet = await this.prisma.wallet.findFirst({ where: { userId } });
     if (!wallet) throw new NotFoundException('Wallet not found for user');
 
     let tx;
@@ -156,7 +173,7 @@ export class TransactionService {
     return { ...response, idempotentReplay: false };
   }
 
-  async sendPayment(userId: string, dto: SendTransferDto, idempotencyKey?: string) {
+  async sendPayment(userId: string, dto: SendDto, idempotencyKey?: string) {
     return this.sendTransfer(userId, dto, idempotencyKey);
   }
 
@@ -193,7 +210,7 @@ export class TransactionService {
   private async replayFromDb(
     userId: string,
     idempotencyKey: string,
-    dto: SendTransferDto,
+    dto: SendDto,
   ): Promise<SendTransferResult> {
     const existing = await this.prisma.transaction.findFirst({
       where: { userId, idempotencyKey },
@@ -214,7 +231,7 @@ export class TransactionService {
   private async enqueueJob(
     txId: string,
     userId: string,
-    dto: SendTransferDto,
+    dto: SendDto,
     idempotencyKey?: string,
   ): Promise<void> {
     const options: JobOptions = { ...TRANSACTION_QUEUE_OPTIONS };
@@ -270,12 +287,73 @@ export class TransactionService {
     return { data, nextCursor, total };
   }
 
+  async getTransactions(
+    userId: string,
+    options: GetTransactionsOptions = {},
+  ): Promise<PaginatedTransactions> {
+    const page = Math.max(1, options.page ?? 1);
+    const limit = Math.min(HISTORY_MAX_LIMIT, Math.max(1, options.limit ?? HISTORY_DEFAULT_LIMIT));
+    const where = {
+      userId,
+      ...(options.status ? { status: options.status as any } : {}),
+      ...(options.assetCode ? { assetCode: options.assetCode } : {}),
+      ...((options.from || options.to)
+        ? {
+            createdAt: {
+              ...(options.from ? { gte: new Date(options.from) } : {}),
+              ...(options.to ? { lte: new Date(options.to) } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const [total, data] = await Promise.all([
+      this.prisma.transaction.count({ where }),
+      this.prisma.transaction.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    return { data, total, page, limit };
+  }
+
   async getTransactionsByWallet(walletId: string) {
     return this.prisma.transaction.findMany({
       where: { walletId },
       orderBy: { createdAt: 'desc' },
       take: 50,
     });
+  }
+
+  /**
+   * Oracle submits delivery attestation
+   */
+  async submitOracleAttestation(oracleAddress: string, attestation: any): Promise<any> {
+    // Verify oracle is registered
+    // In production, check oracle_operators map on contract
+
+    // Release funds to agent
+    await this.soroban.releaseToAgent(attestation.escrowId, attestation);
+
+    // Update transaction status
+    const transaction = await this.prisma.transaction.findFirst({
+      where: { memo: attestation.escrowId },
+    });
+
+    if (transaction) {
+      await this.prisma.transaction.update({
+        where: { id: transaction.id },
+        data: {
+          status: attestation.deliverySuccess ? 'SUCCESS' : 'FAILED',
+          stellarTxHash: attestation.signature,
+        },
+      });
+    }
+
+    return { escrowId: attestation.escrowId, status: 'RELEASED' };
   }
 
   async getTransaction(txId: string, userId?: string) {
@@ -300,7 +378,7 @@ export class TransactionService {
     };
 
     if (flagged && (tx.status === 'PENDING' || tx.status === 'RETRYING')) {
-      data.status = 'REVIEW';
+      data.status = 'PENDING_REVIEW';
     }
 
     return this.prisma.transaction.update({
@@ -311,7 +389,7 @@ export class TransactionService {
 
   async updateTransactionStatus(
     txId: string,
-    status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED' | 'REVIEW',
+    status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED' | 'PENDING_REVIEW',
     stellarTxHash?: string,
   ) {
     const updated = await this.prisma.transaction.update({

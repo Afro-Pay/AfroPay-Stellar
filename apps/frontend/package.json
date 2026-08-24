@@ -4,9 +4,15 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "tsc --pretty false --module commonjs --target es2020 --esModuleInterop --skipLibCheck --lib es2020,dom --types node --outDir .tmp-tests store/walletStore.ts store/walletStore.test.ts lib/api.ts lib/env.ts && node --test .tmp-tests/store/walletStore.test.js",
-    "audit:a11y": "node scripts/a11y-audit.mjs",
-    "start": "next start"
+    "test": "tsc --pretty false --module commonjs --target es2020 --esModuleInterop --skipLibCheck --lib es2020,dom --types node --outDir .tmp-tests store/walletStore.ts store/walletStore.test.ts lib/api.ts lib/env.ts && node --test .tmp-tests/store/walletStore.test.js && npm run test:a11y",
+    "audit:a11y": "npm run test:a11y",
+    "start": "next start",
+    "test:a11y": "vitest run --config vitest.a11y.config.ts",
+    "lint": "next lint",
+    "test:e2e": "npx playwright test --config=playwright.config.ts --project=remittance-flow",
+    "test:stress": "bash scripts/run-stress.sh full",
+    "test:stress:e2e": "bash scripts/run-stress.sh e2e",
+    "test:stress:run": "bash scripts/run-stress.sh stress"
   },
   "dependencies": {
     "@stellar/freighter-api": "^1.7.1",
@@ -20,14 +26,20 @@
     "zustand": "^4.5.0"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20.0.0",
     "@types/react": "^18.2.0",
+    "@vitejs/plugin-react": "^6.0.5",
     "autoprefixer": "^10.4.0",
+    "axe-core": "^4.13.0",
     "eslint": "^8.57.1",
     "eslint-config-next": "^14.2.0",
+    "jsdom": "^30.0.1",
     "postcss": "^8.4.0",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.0.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "@playwright/test": "^1.48.0",
+    "playwright": "^1.48.0"
   }
 }

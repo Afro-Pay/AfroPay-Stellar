@@ -22,14 +22,15 @@ x-logging: &default-logging
     compress: "true"
 
 services:
+  # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     logging: *default-logging
     environment:
-      POSTGRES_USER: remitx
-      POSTGRES_PASSWORD: remitx
-      POSTGRES_DB: remitx
+      POSTGRES_USER: afropay
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_password}
+      POSTGRES_DB: afropay_dev
     ports:
       - "5432:5432"
     volumes:
@@ -41,6 +42,7 @@ services:
       retries: 5
       start_period: 10s
 
+  # Redis Cache & Queue
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -54,6 +56,7 @@ services:
       retries: 5
       start_period: 10s
 
+  # NestJS API
   api:
     build:
       context: ./apps/api
@@ -74,10 +77,13 @@ services:
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
       ANCHOR_USDC_URL: https://testanchor.stellar.org
       ANCHOR_NGN_URL: https://testanchor.stellar.org
+      FRAUD_SERVICE_URL: http://python-analytics:8000
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      python-analytics:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "node -e 'require(\"http\").get(\"http://127.0.0.1:3001/health\", ()=>process.exit(0)).on(\"error\", ()=>process.exit(1))' "]
@@ -86,6 +92,7 @@ services:
       retries: 3
       start_period: 15s
 
+  # Next.js Frontend
   frontend:
     build:
       context: ./apps/frontend
@@ -142,6 +149,96 @@ services:
       retries: 3
       start_period: 15s
 
+  # =============================================================================
+  # mock-anchor — lightweight in-process SEP-6/24 anchor for E2E tests.
+  #
+  # Activate with the `test` profile:
+  #   docker compose --profile test up mock-anchor
+  #
+  # The api service (when running under the test profile) should set:
+  #   ANCHOR_USDC_URL: http://mock-anchor:4100
+  #   ANCHOR_NGN_URL:  http://mock-anchor:4100
+  # =============================================================================
+  mock-anchor:
+    image: node:20-alpine
+    profiles:
+      - test
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "4100:4100"
+    environment:
+      PORT: 4100
+      NODE_ENV: test
+    working_dir: /app
+    volumes:
+      - ./apps/api/test/e2e:/app/e2e:ro
+    # Inline Node.js server — no build step needed.
+    # Serves the same SEP-6 endpoints as the in-process mock-anchor.ts.
+    command: >
+      sh -c "
+        node -e \"
+          const http = require('http');
+          const PORT = parseInt(process.env.PORT || '4100');
+
+          const ROUTES = {
+            '/sep6/deposit'(url, res) {
+              const p = new URLSearchParams(url.split('?')[1] || '');
+              const account = p.get('account') || '';
+              const asset = p.get('asset_code') || 'USDC';
+              json(res, 200, {
+                how: 'Bank transfer to Account #123456',
+                eta: 1800, fee_fixed: 1.0, fee_percent: 0,
+                min_amount: 10, max_amount: 10000,
+                asset_code: asset, stellar_account: account,
+              });
+            },
+            '/sep6/withdraw'(url, res) {
+              const p = new URLSearchParams(url.split('?')[1] || '');
+              const asset = p.get('asset_code') || 'USDC';
+              const amount = parseFloat(p.get('amount') || '0');
+              if (amount > 0 && amount < 10) return json(res, 400, { error: 'Below minimum', min_amount: 10 });
+              if (amount > 10000) return json(res, 400, { error: 'Exceeds maximum', max_amount: 10000 });
+              json(res, 200, {
+                account_id: 'GANCHOR000000000000000000000000000000000000000000000000001',
+                memo_type: 'text', memo: 'withdraw-' + Date.now(),
+                fee_fixed: 0.5, fee_percent: 0,
+                min_amount: 10, max_amount: 10000, asset_code: asset, eta: 600,
+              });
+            },
+            '/.well-known/stellar.toml'(url, res) {
+              res.writeHead(200, { 'Content-Type': 'text/plain' });
+              res.end([
+                'NETWORK_PASSPHRASE=\\\"Test SDF Network ; September 2015\\\"',
+                'SIGNING_KEY=\\\"GBMOCK_ANCHOR_SIGNING_KEY_TEST_ONLY_000000000000000000001\\\"',
+              ].join('\n'));
+            },
+          };
+
+          function json(res, status, body) {
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(body));
+          }
+
+          const srv = http.createServer((req, res) => {
+            const path = (req.url || '/').split('?')[0];
+            const handler = ROUTES[path];
+            if (handler) return handler(req.url, res);
+            json(res, 404, { error: 'Not found' });
+          });
+
+          srv.listen(PORT, '0.0.0.0', () => console.log('mock-anchor listening on ' + PORT));
+        \"
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "node -e 'require(\"http\").get(\"http://127.0.0.1:4100/sep6/deposit?asset_code=USDC&account=test\", r => { r.statusCode < 500 ? process.exit(0) : process.exit(1); }).on(\"error\", () => process.exit(1))'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 volumes:
   pgdata:
   redisdata:
+  prometheusdata:
+  grafanadata:

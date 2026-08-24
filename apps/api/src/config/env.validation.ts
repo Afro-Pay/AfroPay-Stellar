@@ -52,6 +52,18 @@ export const envValidationSchema = Joi.object({
         '"COSIGNER_SECRET" must be a valid Stellar secret seed starting with S',
     }),
 
+  COSIGNER_PUBLIC_KEY: Joi.string()
+    .pattern(/^G[2-9A-Za-z]{55}$/)
+    .optional(),
+
+  SIGNER_URL: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .optional(),
+
+  SIGNER_AUTH_TOKEN: Joi.string()
+    .min(16)
+    .optional(),
+
   KMS_KEY_ID: Joi.string()
     .optional()
     .messages({
@@ -97,42 +109,8 @@ export const envValidationSchema = Joi.object({
       'string.uri': '"ANCHOR_NGN_URL" must be a valid URL',
       'any.required': '"ANCHOR_NGN_URL" is required',
     }),
-
-  // ---------------------------------------------------------------------------
-  // SEP-10 Cryptographic Authentication
-  // ---------------------------------------------------------------------------
-
-  /** Stellar secret key of the SEP-10 server signing keypair.
-   *  Must be a valid Stellar secret seed (starts with S, 56 chars).
-   *  Generate with: `node -e "const sdk=require('stellar-sdk'); console.log(sdk.Keypair.random().secret())"` */
-  SEP10_SERVER_SECRET: Joi.string()
-    .pattern(/^S[2-9A-Za-z]{55}$/)
-    .required()
-    .messages({
-      'string.pattern.base':
-        '"SEP10_SERVER_SECRET" must be a valid Stellar secret seed (starts with S, 56 characters)',
-      'any.required': '"SEP10_SERVER_SECRET" is required',
-    }),
-
-  /** Home domain embedded in SEP-10 challenge manage_data operations.
-   *  Typically your API domain, e.g. "api.afropay.io" */
-  SEP10_HOME_DOMAIN: Joi.string()
-    .hostname()
-    .required()
-    .messages({
-      'string.hostname': '"SEP10_HOME_DOMAIN" must be a valid hostname',
-      'any.required': '"SEP10_HOME_DOMAIN" is required',
-    }),
-
-  /** Nonce TTL in seconds — how long a challenge is valid before it expires.
-   *  SEP-10 spec requires maximum 5 minutes (300 seconds). */
-  SEP10_CHALLENGE_TTL_SECONDS: Joi.number()
-    .integer()
-    .min(30)
-    .max(300)
-    .default(300),
-
-  FRAUD_SERVICE_URL: Joi.string()
-    .uri({ scheme: ['http', 'https'] })
-    .optional(),
-}).or('KMS_KEY_ID', 'ENCRYPTION_KEY').with('KMS_KEY_ID', 'AWS_REGION');
+})
+  .or('KMS_KEY_ID', 'ENCRYPTION_KEY')
+  .with('KMS_KEY_ID', 'AWS_REGION')
+  .with('SIGNER_URL', 'SIGNER_AUTH_TOKEN')
+  .with('SIGNER_AUTH_TOKEN', 'SIGNER_URL');

@@ -20,8 +20,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  validate(payload: JwtPayload) {
-    // Reject refresh tokens submitted as access tokens.
+  validate(payload: { sub: string; email: string; role?: string; type?: string }) {
     if (payload.type === 'refresh') {
       throw new UnauthorizedException({
         code: 'AUTH_TOKEN_INVALID',
@@ -29,13 +28,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       });
     }
 
-    // Both email/password and SEP-10 sessions share the same guard;
-    // downstream services receive whichever identity fields are present.
-    return {
-      userId: payload.sub,
-      email: payload.email ?? null,
-      stellarPublicKey: payload.stellarPublicKey ?? null,
-      authType: payload.type === 'sep10' ? 'sep10' : 'password',
-    };
+    return { userId: payload.sub, email: payload.email, role: payload.role ?? 'USER' };
   }
 }

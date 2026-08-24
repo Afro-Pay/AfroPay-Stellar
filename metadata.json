@@ -1,0 +1,8 @@
+{
+  "name": "AfroPay Stellar",
+  "description": "Cross-border remittance platform built on the Stellar blockchain — fast, low-cost, and Africa-focused.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -14,6 +14,9 @@ All environment variables used across AfroPay-Stellar services, their defaults, 
 | `ENCRYPTION_KEY` | 32-byte hex key for AES-256-CBC wallet key encryption | — | Conditional | **Yes** |
 | `KMS_KEY_ID` | AWS KMS key identifier used to encrypt per-wallet data keys | — | Conditional | **Yes** |
 | `AWS_REGION` | AWS region for the KMS key | — | Conditional | No |
+| `SIGNER_URL` | Internal URL for the delegated signer contract | — | Required for signing | No |
+| `SIGNER_AUTH_TOKEN` | POC signer bearer credential; use workload identity and mTLS in production | — | Required for signing | **Yes** |
+| `COSIGNER_PUBLIC_KEY` | Multisig policy public key; the API does not load a cosigner secret | — | Optional | No |
 | `STELLAR_NETWORK` | Stellar network (`testnet` or `mainnet`) | `testnet` | No | No |
 | `STELLAR_HORIZON_URL` | Stellar Horizon API endpoint | `https://horizon-testnet.stellar.org` | No | No |
 | `ANCHOR_USDC_URL` | SEP-6 anchor URL for USDC deposits/withdrawals | `https://testanchor.stellar.org` | No | No |
