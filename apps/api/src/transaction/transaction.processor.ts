@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { Process, Processor } from '@nestjs/bull';
 import { Job } from 'bull';
 import { PrismaService } from '../prisma/prisma.service';
@@ -6,6 +6,7 @@ import { AuditService } from '../audit/audit.service';
 import { Logger } from 'nestjs-pino';
 import { FraudService } from './fraud.service';
 import { assertTransactionAmountIntegrity } from './transaction-integrity';
+import { RedisLockService } from '../common/lock/lock.service';
 
 /** riskScore >= this threshold → reject outright (FAILED). */
 const FRAUD_BLOCK_THRESHOLD = 0.8;
@@ -36,6 +37,7 @@ export class TransactionProcessor {
     private auditService: AuditService,
     private logger: Logger,
     private fraudService: FraudService,
+    @Optional() private lockService?: RedisLockService,
   ) {}
 
   /**
@@ -78,7 +80,11 @@ export class TransactionProcessor {
       return transaction;
     }
 
-    return this.processTransaction(userId, transaction, amount, assetCode, destinationPublicKey, memo);
+    const lockService = this.lockService ?? new RedisLockService();
+    return lockService.withLock(
+      `lock:escrow:${transaction.id}`,
+      () => this.processTransaction(userId, transaction, amount, assetCode, destinationPublicKey, memo),
+    );
   }
 
   /**

@@ -131,6 +131,10 @@ model KycRecord {
   /// key: "<s3-key>:<sha256-hex>". Set by POST /kyc/confirm-upload after hash
   /// verification. Null until the upload is confirmed.
   documentRef     String?
+  firstName       String?
+  lastName        String?
+  idType          String?
+  photoId         String?
   submittedAt     DateTime?
   reviewedAt      DateTime?
   rejectionReason String?
