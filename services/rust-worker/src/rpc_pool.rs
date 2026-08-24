@@ -489,6 +489,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn posts_transactions_to_backup_when_primary_fails() {
+        let primary_hits = Arc::new(AtomicUsize::new(0));
+        let backup_hits = Arc::new(AtomicUsize::new(0));
+        let primary = serve_json(primary_hits.clone(), 500, r#"{"error":"down"}"#).await;
+        let backup = serve_json(backup_hits.clone(), 200, r#"{"hash":"abc123"}"#).await;
+        let pool = RpcPool::new(vec![
+            endpoint("primary", &primary, RpcEndpointKind::Horizon),
+            endpoint("backup", &backup, RpcEndpointKind::Horizon),
+        ]);
+        pool.mark_success("primary", 10, Some(10)).await;
+        pool.mark_success("backup", 10, Some(10)).await;
+
+        let payload = pool
+            .horizon_post_form("/transactions", &[("tx", "xdr")])
+            .await
+            .expect("backup should accept transaction");
+
+        assert_eq!(payload["hash"], "abc123");
+        assert_eq!(primary_hits.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(backup_hits.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn excludes_horizon_nodes_lagging_more_than_three_ledgers() {
         let stale_hits = Arc::new(AtomicUsize::new(0));
         let fresh_hits = Arc::new(AtomicUsize::new(0));
