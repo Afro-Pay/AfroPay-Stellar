@@ -22,14 +22,15 @@ x-logging: &default-logging
     compress: "true"
 
 services:
+  # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     logging: *default-logging
     environment:
-      POSTGRES_USER: remitx
-      POSTGRES_PASSWORD: remitx
-      POSTGRES_DB: remitx
+      POSTGRES_USER: afropay
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_password}
+      POSTGRES_DB: afropay_dev
     ports:
       - "5432:5432"
     volumes:
@@ -41,6 +42,7 @@ services:
       retries: 5
       start_period: 10s
 
+  # Redis Cache & Queue
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -54,6 +56,7 @@ services:
       retries: 5
       start_period: 10s
 
+  # NestJS API
   api:
     build:
       context: ./apps/api
@@ -89,6 +92,7 @@ services:
       retries: 3
       start_period: 15s
 
+  # Next.js Frontend
   frontend:
     build:
       context: ./apps/frontend

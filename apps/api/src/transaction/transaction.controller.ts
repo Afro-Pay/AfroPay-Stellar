@@ -108,6 +108,10 @@ export class TransactionController {
     });
   }
 
+  /**
+   * GET /transaction/:id
+   * Get transaction status
+   */
   @Get(':id')
   @ApiOperation({ summary: 'Get transaction by ID' })
   @ApiResponse({

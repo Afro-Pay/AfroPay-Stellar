@@ -28,5 +28,7 @@ import { AdminModule } from './admin/admin.module';
     TransactionModule,
     AdminModule,
   ],
+  controllers: [],
+  providers: [],
 })
 export class AppModule {}
