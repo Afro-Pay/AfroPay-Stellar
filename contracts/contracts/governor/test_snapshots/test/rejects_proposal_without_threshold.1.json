@@ -148,6 +148,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "Executors"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "map": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "FeeBps"
                           }
                         ]
@@ -199,6 +211,18 @@
                             }
                           }
                         ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "StorageVersion"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u32": 3
                       }
                     },
                     {
