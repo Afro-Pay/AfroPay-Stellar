@@ -2,6 +2,10 @@ import axios from 'axios';
 import { RpcClientService } from './rpc-client.service';
 
 jest.mock('axios');
+jest.mock('stellar-sdk', () => ({
+  Horizon: { Server: jest.fn() },
+  SorobanRpc: { Server: jest.fn() },
+}));
 
 describe('RpcClientService', () => {
   const originalEnv = process.env;

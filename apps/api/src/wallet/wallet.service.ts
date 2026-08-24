@@ -82,7 +82,7 @@ export class WalletService {
         publicKey,
         alias,
         isDefault,
-      },
+      } as any,
     });
 
     this.logger.log({
