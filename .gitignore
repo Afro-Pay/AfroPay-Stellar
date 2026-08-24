@@ -22,3 +22,9 @@ build/
 # Misc
 *.log
 .DS_Store
+
+# Playwright / E2E test artifacts
+apps/frontend/playwright-report/
+apps/frontend/test-results/
+apps/frontend/stress-report/
+apps/frontend/blob-report/
