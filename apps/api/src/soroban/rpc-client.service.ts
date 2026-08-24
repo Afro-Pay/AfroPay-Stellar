@@ -133,6 +133,7 @@ export class RpcClientService implements OnModuleInit, OnModuleDestroy {
       } catch (error) {
         const status = this.extractStatus(error);
         this.markFailure(endpoint, error, status);
+        this.prometheus?.rpcFailoversTotal?.labels(kind, endpoint.id).inc();
         errors.push(`${endpoint.id}: ${this.errorMessage(error)}`);
       }
     }

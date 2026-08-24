@@ -170,6 +170,14 @@ export class PrometheusService implements OnModuleInit {
     registers: [this.registry],
   });
 
+  /** RPC request failures that triggered fallback to another provider. */
+  readonly rpcFailoversTotal = new Counter({
+    name: 'afropay_rpc_failovers_total',
+    help: 'Total number of RPC request failures that triggered provider failover',
+    labelNames: ['kind', 'endpoint_id'],
+    registers: [this.registry],
+  });
+
   // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
