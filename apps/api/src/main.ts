@@ -4,6 +4,7 @@ import { Logger } from 'nestjs-pino';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { CorrelationIdInterceptor } from './common/interceptors/correlation-id.interceptor';
+import { HttpMetricsInterceptor } from './metrics/http-metrics.interceptor';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 
@@ -89,8 +90,8 @@ async function bootstrap() {
     writeFileSync(outputPath, JSON.stringify(document, null, 2), 'utf8');
     
     const logger = app.get(Logger);
-    logger.info(`📚 API documentation available at http://localhost:${process.env.PORT || 3000}/api/docs`);
-    logger.info(`📄 OpenAPI spec exported to ${outputPath}`);
+    logger.log(`📚 API documentation available at http://localhost:${process.env.PORT || 3000}/api/docs`);
+    logger.log(`📄 OpenAPI spec exported to ${outputPath}`);
   }
 
   const port = process.env.PORT || 3000;

@@ -14,6 +14,7 @@ import { AuthModule } from '../auth/auth.module';
 import { KycModule } from '../kyc/kyc.module';
 import { AnchorModule } from '../anchor/anchor.module';
 import { AuditModule } from '../audit/audit.module';
+import { SorobanModule } from '../soroban/soroban.module';
 import { RedisLockService } from '../common/lock/lock.service';
 
 @Module({
@@ -28,6 +29,7 @@ import { RedisLockService } from '../common/lock/lock.service';
     KycModule,
     AnchorModule,
     AuditModule,
+    SorobanModule,
   ],
   providers: [
     TransactionService,
