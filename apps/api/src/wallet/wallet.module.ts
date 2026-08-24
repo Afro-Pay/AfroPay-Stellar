@@ -5,9 +5,10 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { VaultService } from '../vault/vault.service';
 import { WalletOwnershipGuard } from './wallet-ownership.guard';
+import { SorobanModule } from '../soroban/soroban.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule],
+  imports: [PrismaModule, AuthModule, SorobanModule],
   providers: [WalletService, VaultService, WalletOwnershipGuard],
   controllers: [WalletController],
   exports: [WalletService],
