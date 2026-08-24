@@ -18,7 +18,7 @@ pub async fn listen() -> Result<()> {
         let mut conn = self.client.get_async_connection().await?;
 
         match conn.llen::<_, i64>("stellar_jobs").await {
-            Ok(len) => QUEUE_DEPTH.set(len),
+            Ok(len) => set_queue_depth(len),
             Err(e) => error!("Failed to fetch queue length: {}", e),
         }
 
@@ -79,5 +79,22 @@ pub async fn listen() -> Result<()> {
         } else {
             Ok(None)
         }
+    }
+}
+
+/// Classify a stringified submission error into a stable `error_type` label.
+fn classify_queue_error(msg: &str) -> &'static str {
+    if msg.contains("400") || msg.contains("Bad Request") {
+        "horizon_error"
+    } else if msg.contains("502") || msg.contains("503") || msg.contains("504") {
+        "horizon_error"
+    } else if msg.contains("timeout") || msg.contains("timed out") {
+        "timeout"
+    } else if msg.contains("connection") || msg.contains("connect") {
+        "connection_error"
+    } else if msg.contains("sign") || msg.contains("keypair") {
+        "signing_error"
+    } else {
+        "unknown"
     }
 }

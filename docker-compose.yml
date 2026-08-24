@@ -236,3 +236,5 @@ services:
 volumes:
   pgdata:
   redisdata:
+  prometheusdata:
+  grafanadata:

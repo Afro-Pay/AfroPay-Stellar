@@ -11,7 +11,6 @@ use std::env;
 use redis::Client;
 use stellar_sdk::Keypair;
 use stellar::StellarService;
-use models::TransactionJob;
 use queue::QueueService;
 use lock_manager::LockManager;
 
@@ -51,6 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(e) = process_job(&stellar_service, job, &db_pool).await {
                     tracing::error!("Job failed: {}", e);
                 }
+                metrics::ACTIVE_WORKERS.dec();
             }
             Ok(None) => {
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;

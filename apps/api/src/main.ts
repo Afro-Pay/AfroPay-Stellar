@@ -24,6 +24,10 @@ async function bootstrap() {
   // Global correlation ID interceptor
   app.useGlobalInterceptors(new CorrelationIdInterceptor());
 
+  // Global HTTP metrics interceptor — records request count and duration.
+  // Must be retrieved from the DI container so PrometheusService is injected.
+  app.useGlobalInterceptors(app.get(HttpMetricsInterceptor));
+
   // CORS
   app.enableCors({
     origin: process.env.CORS_ORIGIN || '*',
