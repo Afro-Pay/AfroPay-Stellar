@@ -7,7 +7,6 @@ import { TransactionDlqService } from './transaction-dlq.service';
 import { TransactionProcessor } from './transaction.processor';
 import { TransferSimulationService } from './transfer-simulation.service';
 import { FraudService } from './fraud.service';
-import { AdminGuard } from '../admin/admin.guard';
 import { PrismaModule } from '../prisma/prisma.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AuthModule } from '../auth/auth.module';
