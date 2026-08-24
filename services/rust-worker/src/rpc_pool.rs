@@ -41,6 +41,7 @@ pub struct RpcEndpointState {
     pub consecutive_failures: u32,
     pub last_error: Option<String>,
     pub rate_limited_until: Option<Instant>,
+    routing_balance: f64,
 }
 
 #[derive(Clone)]
@@ -78,6 +79,7 @@ impl RpcPool {
                 consecutive_failures: 0,
                 last_error: None,
                 rate_limited_until: None,
+                routing_balance: 0.0,
             })
             .collect();
 
@@ -244,26 +246,64 @@ impl RpcPool {
     }
 
     async fn ranked_healthy(&self, kind: RpcEndpointKind) -> Vec<RpcEndpointState> {
-        let endpoints = self.endpoints.read().await;
+        let mut endpoints = self.endpoints.write().await;
         let highest = endpoints
             .iter()
             .filter(|endpoint| endpoint.config.kind == kind)
             .filter_map(|endpoint| endpoint.block_height)
             .max();
         let now = Instant::now();
-        let mut candidates = endpoints
+        let mut candidate_indexes = endpoints
             .iter()
-            .filter(|endpoint| endpoint.config.kind == kind)
-            .filter(|endpoint| is_routable(endpoint, highest, self.max_block_lag, now))
-            .cloned()
+            .enumerate()
+            .filter(|(_, endpoint)| endpoint.config.kind == kind)
+            .filter(|(_, endpoint)| is_routable(endpoint, highest, self.max_block_lag, now))
+            .map(|(index, _)| index)
             .collect::<Vec<_>>();
 
-        candidates.sort_by(|left, right| {
-            effective_weight(right)
-                .partial_cmp(&effective_weight(left))
+        if candidate_indexes.len() <= 1 {
+            return candidate_indexes
+                .into_iter()
+                .map(|index| endpoints[index].clone())
+                .collect();
+        }
+
+        let total_weight = candidate_indexes
+            .iter()
+            .map(|index| effective_weight(&endpoints[*index]))
+            .sum::<f64>();
+
+        for index in &candidate_indexes {
+            endpoints[*index].routing_balance += effective_weight(&endpoints[*index]);
+        }
+
+        let selected_index = *candidate_indexes
+            .iter()
+            .max_by(|left, right| {
+                endpoints[**left]
+                    .routing_balance
+                    .partial_cmp(&endpoints[**right].routing_balance)
+                    .unwrap_or(Ordering::Equal)
+            })
+            .expect("candidate list is not empty");
+        endpoints[selected_index].routing_balance -= total_weight;
+
+        candidate_indexes.sort_by(|left, right| {
+            if *left == selected_index {
+                return Ordering::Less;
+            }
+            if *right == selected_index {
+                return Ordering::Greater;
+            }
+            effective_weight(&endpoints[*right])
+                .partial_cmp(&effective_weight(&endpoints[*left]))
                 .unwrap_or(Ordering::Equal)
         });
-        candidates
+
+        candidate_indexes
+            .into_iter()
+            .map(|index| endpoints[index].clone())
+            .collect()
     }
 
     async fn poll_endpoint(&self, config: &RpcEndpointConfig) {
@@ -482,6 +522,29 @@ mod tests {
 
         assert_eq!(payload["history_latest_ledger"], 88);
         assert_eq!(states[0].status, RpcHealthStatus::RateLimited);
+    }
+
+    #[tokio::test]
+    async fn prefers_lower_latency_nodes_over_multiple_selections() {
+        let pool = RpcPool::new(vec![
+            endpoint("fast", "http://fast.test", RpcEndpointKind::Horizon),
+            endpoint("slow", "http://slow.test", RpcEndpointKind::Horizon),
+        ]);
+        pool.mark_success("fast", 10, Some(10)).await;
+        pool.mark_success("slow", 100, Some(10)).await;
+
+        let mut fast = 0;
+        let mut slow = 0;
+        for _ in 0..10 {
+            let ranked = pool.ranked_healthy(RpcEndpointKind::Horizon).await;
+            match ranked.first().map(|endpoint| endpoint.config.id.as_str()) {
+                Some("fast") => fast += 1,
+                Some("slow") => slow += 1,
+                other => panic!("unexpected selected endpoint: {:?}", other),
+            }
+        }
+
+        assert!(fast > slow, "fast endpoint should win more often");
     }
 
     fn endpoint(id: &str, url: &str, kind: RpcEndpointKind) -> RpcEndpointConfig {
