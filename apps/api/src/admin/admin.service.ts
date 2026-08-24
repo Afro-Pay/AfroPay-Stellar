@@ -54,7 +54,7 @@ export class AdminComplianceService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { wallet: true, kyc: true },
+      include: { wallets: true, kyc: true },
     });
     if (!user) throw new NotFoundException('User not found');
 
@@ -73,9 +73,9 @@ export class AdminComplianceService {
         },
       });
 
-      if (user.wallet) {
+      for (const wallet of user.wallets) {
         await tx.wallet.update({
-          where: { id: user.wallet.id },
+          where: { id: wallet.id },
           data: {
             userId: pseudonymousUserId,
             encryptedSecret: `ERASED:${randomBytes(32).toString('hex')}`,
@@ -94,6 +94,13 @@ export class AdminComplianceService {
         where: { userId },
         select: { id: true, metadata: true },
       });
+      if (subjectAuditLogs.length > 0) {
+        // AuditLog rows are append-only at the database level (see the
+        // audit_log_immutable trigger); this transaction-scoped setting is
+        // the one narrow, explicit opt-in that lets erasure pseudonymise
+        // userId/metadata on existing rows without deleting them.
+        await tx.$executeRawUnsafe(`SET LOCAL audit_log.allow_anonymization = 'on'`);
+      }
       for (const log of subjectAuditLogs) {
         await tx.auditLog.update({
           where: { id: log.id },

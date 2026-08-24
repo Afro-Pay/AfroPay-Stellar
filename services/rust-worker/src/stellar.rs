@@ -1,93 +1,14 @@
-use std::env;
-use stellar_sdk::{
-    types::{AccountId, Asset, Memo, MemoText, Operation, Transaction},
-    HorizonClient, Keypair, Network,
-};
-
-pub struct StellarService {
-    horizon_client: HorizonClient,
-    network: Network,
-}
-
-#[derive(Debug)]
-pub struct SigningConfig {
-    pub requires_cosign: bool,
-    pub user_keypair: Keypair,
-    pub cosigner_keypair: Option<Keypair>,
-}
-
-impl StellarService {
-    pub fn new() -> Self {
-        let horizon_url = env::var("HORIZON_URL")
-            .unwrap_or_else(|_| "https://horizon-testnet.stellar.org".to_string());
-        let network = if env::var("STELLAR_NETWORK").unwrap_or_default() == "mainnet" {
-            Network::Public
-        } else {
-            Network::Testnet
-        };
-
-        StellarService {
-            horizon_client: HorizonClient::new(horizon_url),
-            network,
-        }
-    }
-
-    /// Build a transaction with optional multi-signature
-    pub async fn build_transaction(
-        &self,
-        source_account: &str,
-        destination: &str,
-        amount: &str,
-        asset_code: &str,
-        asset_issuer: &str,
-        memo: Option<&str>,
-        config: &SigningConfig,
-    ) -> Result<Transaction, Box<dyn std::error::Error>> {
-        let source_account = self.horizon_client.load_account(source_account).await?;
-
-        let asset = if asset_code == "XLM" {
-            Asset::native()
-        } else {
-            Asset::new(asset_code, asset_issuer)?
-        };
-
-        let mut transaction = Transaction::builder(&source_account)
-            .operation(Operation::Payment {
-                destination: AccountId::from_string(destination)?,
-                asset,
-                amount: amount.parse()?,
-            })
-            .network(self.network);
+//! Stellar XDR construction and key-derivation helpers.
+//!
+//! Transaction envelopes are built directly against `stellar-xdr` and signed
+//! with `ed25519-dalek`, so the worker only depends on crates that actually
+//! exist on crates.io (the previously referenced `stellar_sdk 0.4` was never
+//! published, so the old high-level `StellarService` could not compile).
 
 /// Stroops charged per operation for a simple payment transaction.
-const BASE_FEE_STROOPS: u32 = 100;
+pub(crate) const BASE_FEE_STROOPS: u32 = 100;
 pub const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
 pub const PUBLIC_PASSPHRASE: &str = "Public Global Stellar Network ; September 2015";
-
-/// How many times to resubmit a transaction after a `tx_bad_seq` response before giving up.
-const MAX_SEQUENCE_RETRIES: u32 = 3;
-
-/// Errors returned while submitting a payment to Horizon.
-#[derive(Debug, Error)]
-pub enum SubmitError {
-    #[error("horizon request failed: {0}")]
-    Http(#[from] reqwest::Error),
-    #[error("failed to build transaction: {0}")]
-    Build(String),
-    #[error("horizon returned an unexpected response: {0}")]
-    UnexpectedResponse(String),
-    /// The transaction was rejected in a way that will never succeed by retrying
-    /// (e.g. the source account doesn't have enough balance to cover the payment).
-    #[error("transaction permanently failed: {0}")]
-    PermanentFailure(String),
-    #[error("gave up after {0} attempts due to repeated tx_bad_seq responses")]
-    RetriesExhausted(u32),
-}
-
-enum SubmitOutcome {
-    Success(String),
-    RetryWithFreshSequence,
-}
 
 /// Derive a Stellar account ID (G...) from a Stellar secret seed (S...).
 pub fn derive_public_key(secret: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -100,108 +21,7 @@ pub fn derive_public_key(secret: &str) -> Result<String, Box<dyn std::error::Err
     Ok(format!("{}", PublicKey(verifying_key.to_bytes())))
 }
 
-/// Fetch the current sequence number for an account from Horizon.
-async fn fetch_sequence(
-    client: &reqwest::Client,
-    horizon_base_url: &str,
-    account_id: &str,
-) -> Result<i64, SubmitError> {
-    let url = format!(
-        "{}/accounts/{}",
-        horizon_base_url.trim_end_matches('/'),
-        account_id
-    );
-    let response = client.get(&url).send().await?;
-    if !response.status().is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(SubmitError::UnexpectedResponse(format!(
-            "failed to load account {}: {}",
-            account_id, body
-        )));
-    }
-
-    let value: serde_json::Value = response.json().await?;
-    let sequence = value
-        .get("sequence")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            SubmitError::UnexpectedResponse("account response missing sequence field".into())
-        })?;
-    sequence.parse::<i64>().map_err(|e| {
-        SubmitError::UnexpectedResponse(format!("invalid sequence number '{}': {}", sequence, e))
-    })
-}
-
-/// Submit a signed transaction envelope (base64 XDR) to Horizon and classify the result.
-async fn submit_xdr(
-    client: &reqwest::Client,
-    horizon_base_url: &str,
-    xdr: &str,
-) -> Result<SubmitOutcome, SubmitError> {
-    let url = format!("{}/transactions", horizon_base_url.trim_end_matches('/'));
-    let response = client.post(&url).form(&[("tx", xdr)]).send().await?;
-    let status = response.status();
-    let body: serde_json::Value = response.json().await?;
-
-    if status.is_success() {
-        let hash = body
-            .get("hash")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                SubmitError::UnexpectedResponse("success response missing hash field".into())
-            })?;
-        return Ok(SubmitOutcome::Success(hash.to_string()));
-    }
-
-    let tx_result_code = body
-        .pointer("/extras/result_codes/transaction")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    match tx_result_code.as_str() {
-        "tx_bad_seq" => Ok(SubmitOutcome::RetryWithFreshSequence),
-        other => Err(SubmitError::PermanentFailure(format!(
-            "horizon rejected transaction: {}",
-            other
-        ))),
-    }
-}
-
-/// Build, sign and submit a Stellar payment for `job`, retrying with a refreshed
-/// sequence number when Horizon reports `tx_bad_seq`, and treating any other
-/// rejection (e.g. `tx_insufficient_balance`) as permanent — no further retries.
-pub async fn submit_transaction(
-    client: &reqwest::Client,
-    horizon_base_url: &str,
-    job: &crate::models::TransactionJob,
-    source_secret: &str,
-    network_passphrase: &str,
-) -> Result<String, SubmitError> {
-    let source_account =
-        derive_public_key(source_secret).map_err(|e| SubmitError::Build(e.to_string()))?;
-
-    for attempt in 1..=MAX_SEQUENCE_RETRIES {
-        let sequence = fetch_sequence(client, horizon_base_url, &source_account).await?;
-        let xdr = build_payment_xdr(job, source_secret, sequence, network_passphrase)
-            .map_err(|e| SubmitError::Build(e.to_string()))?;
-
-        match submit_xdr(client, horizon_base_url, &xdr).await? {
-            SubmitOutcome::Success(hash) => return Ok(hash),
-            SubmitOutcome::RetryWithFreshSequence => {
-                if attempt == MAX_SEQUENCE_RETRIES {
-                    return Err(SubmitError::RetriesExhausted(attempt));
-                }
-                // Loop again: the next iteration re-fetches the sequence number.
-            }
-        }
-    }
-
-    Err(SubmitError::RetriesExhausted(MAX_SEQUENCE_RETRIES))
-}
-
-/// Determine if a transaction requires a cosigner based on its USD amount and a threshold.
-#[allow(dead_code)]
+/// Helper function to determine if a transaction requires cosigning.
 pub fn requires_cosign(amount_usd: f64, threshold_usd: f64) -> bool {
     amount_usd > threshold_usd
 }
@@ -276,7 +96,7 @@ pub fn build_payment_xdr(
     .map_err(Into::into)
 }
 
-fn build_xdr_asset(
+pub(crate) fn build_xdr_asset(
     code: &str,
     issuer: &str,
 ) -> Result<stellar_xdr::curr::Asset, Box<dyn std::error::Error>> {
@@ -318,13 +138,13 @@ fn build_xdr_asset(
 
 fn build_xdr_memo(memo: &str) -> Result<stellar_xdr::curr::Memo, Box<dyn std::error::Error>> {
     use stellar_xdr::curr::{Memo, StringM};
-    if memo.len() > 28 {
+    if memo.as_bytes().len() > 28 {
         return Err("Stellar text memo must be 28 bytes or fewer".into());
     }
     Ok(Memo::Text(StringM::try_from(memo.to_string())?))
 }
 
-fn parse_stellar_amount(amount: &str) -> Result<i64, Box<dyn std::error::Error>> {
+pub(crate) fn parse_stellar_amount(amount: &str) -> Result<i64, Box<dyn std::error::Error>> {
     let (whole, frac) = amount.split_once('.').unwrap_or((amount, ""));
     if frac.len() > 7 {
         return Err("Stellar amounts support at most 7 decimal places".into());
@@ -360,11 +180,11 @@ mod tests {
 
     #[test]
     fn test_derive_public_key_from_secret_seed() {
-        let secret = "SADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP54X";
+        let secret = "SA2YNBQZ6FJ6OKMOQHZ2BUZBS5ERLSOXFPUCXJ66ASOLFSLG57YPOOHH";
         let public = derive_public_key(secret).expect("secret seed should derive public key");
         assert_eq!(
             public,
-            "GDVEU3DD4KOFECV66VIHWEZOYX4ZKR3WV27L464SIIPOU2IUI3JCZA57"
+            "GBZDVZMN65YLWARGZ5Y4DBWECYJBWHKEBSNZUMPKKTKOP3OWSYVD23BQ"
         );
     }
 
@@ -375,8 +195,8 @@ mod tests {
         let job = crate::models::TransactionJob {
             id: "test-job".to_string(),
             user_id: "test-user".to_string(),
-            source_wallet: "GDVEU3DD4KOFECV66VIHWEZOYX4ZKR3WV27L464SIIPOU2IUI3JCZA57".to_string(),
-            destination_wallet: "GD6ROJBYLKQMOW3E7N4M2YBPUHMZD7PL65VRHRMO24BOVSBV5H3BQRSL"
+            source_wallet: "GBZDVZMN65YLWARGZ5Y4DBWECYJBWHKEBSNZUMPKKTKOP3OWSYVD23BQ".to_string(),
+            destination_wallet: "GB3IZ2LJNZ7GFE6TQHDEZAGK5QLQJ2UPLY5TMNU5BZIWJYCA3C7INQRO"
                 .to_string(),
             amount: "12.3456789".to_string(),
             asset_code: "XLM".to_string(),
@@ -388,7 +208,7 @@ mod tests {
 
         let xdr = build_payment_xdr(
             &job,
-            "SADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP54X",
+            "SA2YNBQZ6FJ6OKMOQHZ2BUZBS5ERLSOXFPUCXJ66ASOLFSLG57YPOOHH",
             12345,
             TESTNET_PASSPHRASE,
         )

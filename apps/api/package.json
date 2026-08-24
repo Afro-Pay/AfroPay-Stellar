@@ -10,6 +10,7 @@
     "test:e2e": "jest --config jest.e2e.json --runInBand --forceExit",
     "prisma:migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "compliance": "node dist/admin/compliance.cli.js"
   },

@@ -84,6 +84,13 @@ export class AuthService {
         email,
         ipAddress,
       });
+      await this.auditService.log({
+        userId: user?.id ?? null,
+        category: AuditCategory.AUTH,
+        operation: AuditOperation.LOGIN_FAILED,
+        outcome: AuditOutcome.FAILURE,
+        metadata: { email, ipAddress, userAgent },
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 

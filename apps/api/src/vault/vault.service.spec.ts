@@ -22,7 +22,7 @@ describe('VaultService delegated signing', () => {
         COSIGNER_PUBLIC_KEY: 'GCOSIGNER',
       })[key]),
     } as any;
-    prisma = { wallet: { findUnique: jest.fn().mockResolvedValue(wallet) } };
+    prisma = { wallet: { findFirst: jest.fn().mockResolvedValue(wallet) } };
     service = new VaultService(config, prisma);
   });
 
@@ -37,7 +37,7 @@ describe('VaultService delegated signing', () => {
 
     const result = await service.signTransaction('user-1', 'unsigned-xdr');
 
-    expect(prisma.wallet.findUnique).toHaveBeenCalledWith({
+    expect(prisma.wallet.findFirst).toHaveBeenCalledWith({
       where: { userId: 'user-1' },
       select: { id: true, publicKey: true },
     });

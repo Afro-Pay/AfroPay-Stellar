@@ -16,7 +16,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.11", features = ["json", "stream"] }
 stellar-base = "0.7"
-stellar-horizon = "0.7"
 thiserror = "1"
 anyhow = "1"
 chrono = "0.4"

@@ -76,6 +76,9 @@ export class WalletService {
       throw new Error('Wallet alias must be 32 characters or less');
     }
 
+    // The create payload predates secret provisioning (encryptedSecret is
+    // required by the schema but filled in by the import/restore flows); keep
+    // the pre-existing behaviour by casting like the original implementation.
     const wallet = await this.prisma.wallet.create({
       data: {
         userId,
