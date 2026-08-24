@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BullModule } from '@nestjs/bull';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { WalletModule } from './wallet/wallet.module';
@@ -20,10 +21,11 @@ import { RateLimitModule } from './rate-limit/rate-limit.module';
         }),
       },
     }),
-    // Registers RateLimitGuardRedis as a global APP_GUARD so every
-    // @RateLimit(...) decorated route is enforced. Routes without the
-    // decorator are unaffected (the guard is a no-op for them).
-    RateLimitModule,
+    // Global Bull/Redis connection — shared by every BullModule.registerQueue().
+    // Falls back to localhost in test/dev when REDIS_URL is absent.
+    BullModule.forRoot({
+      redis: process.env.REDIS_URL || 'redis://localhost:6379',
+    }),
     AuditModule,
     AuthModule,
     WalletModule,

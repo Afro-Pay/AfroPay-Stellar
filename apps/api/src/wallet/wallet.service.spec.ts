@@ -37,6 +37,23 @@ describe("WalletService encryption", () => {
   });
 });
 
+describe("WalletService delegated signing", () => {
+  it("forwards unsigned XDR to the external signer boundary", async () => {
+    const signer = {
+      signTransaction: jest.fn().mockResolvedValue({
+        signedTransactionXdr: "signed-xdr",
+        signerPublicKey: "GPUBLIC",
+        requestId: "request-1",
+      }),
+    };
+    const service = new WalletService(null as any, signer as any);
+
+    await expect(service.signTransaction("user-1", "unsigned-xdr"))
+      .resolves.toEqual(expect.objectContaining({ signedTransactionXdr: "signed-xdr" }));
+    expect(signer.signTransaction).toHaveBeenCalledWith("user-1", "unsigned-xdr");
+  });
+});
+
 describe("WalletService reconciliation", () => {
   let service: WalletService;
   let prisma: any;

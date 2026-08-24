@@ -9,6 +9,9 @@ NETWORK="testnet"
 SOURCE_ACCOUNT="$DEFAULT_SOURCE_ACCOUNT"
 FUND="false"
 SKIP_BUILD="false"
+UPGRADE="false"
+CONTRACT_ID=""
+PAYMENT_ID=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -27,6 +30,18 @@ while [[ $# -gt 0 ]]; do
     --skip-build)
       SKIP_BUILD="true"
       shift
+      ;;
+    --upgrade)
+      UPGRADE="true"
+      shift
+      ;;
+    --contract-id)
+      CONTRACT_ID="$2"
+      shift 2
+      ;;
+    --payment-id)
+      PAYMENT_ID="$2"
+      shift 2
       ;;
     -h|--help)
       usage_deploy
@@ -54,14 +69,49 @@ if [[ ! -f "$WASM_FILE" ]]; then
   exit 1
 fi
 
-echo "==> Deploying $CONTRACT_PACKAGE to $NETWORK"
-CONTRACT_ID="$(
-  stellar contract deploy \
+if [[ "$UPGRADE" == "true" ]]; then
+  if [[ -z "$CONTRACT_ID" || -z "$PAYMENT_ID" ]]; then
+    echo "error: --upgrade requires --contract-id and --payment-id"
+    exit 1
+  fi
+
+  echo "==> Installing upgrade wasm"
+  WASM_HASH="$(stellar contract install \
     --wasm "$WASM_FILE" \
     --source-account "$SOURCE_ACCOUNT" \
+    --network "$NETWORK")"
+  echo "==> Upgrading $CONTRACT_ID"
+  stellar contract upgrade \
+    --id "$CONTRACT_ID" \
+    --wasm-hash "$WASM_HASH" \
+    --source-account "$SOURCE_ACCOUNT" \
+    --network "$NETWORK"
+  echo "==> Migrating payment $PAYMENT_ID"
+  stellar contract invoke \
+    --id "$CONTRACT_ID" \
+    --source-account "$SOURCE_ACCOUNT" \
     --network "$NETWORK" \
-    --alias "$CONTRACT_ALIAS"
-)"
+    -- \
+    migrate \
+    --admin "$SOURCE_ACCOUNT" \
+    --payment-ids "[\"$PAYMENT_ID\"]"
+else
+  echo "==> Deploying $CONTRACT_PACKAGE to $NETWORK"
+  CONTRACT_ID="$(
+    stellar contract deploy \
+      --wasm "$WASM_FILE" \
+      --source-account "$SOURCE_ACCOUNT" \
+      --network "$NETWORK" \
+      --alias "$CONTRACT_ALIAS"
+  )"
+  stellar contract invoke \
+    --id "$CONTRACT_ID" \
+    --source-account "$SOURCE_ACCOUNT" \
+    --network "$NETWORK" \
+    -- \
+    initialize \
+    --admin "$SOURCE_ACCOUNT"
+fi
 
 echo "==> Deployed contract id: $CONTRACT_ID"
 save_deployment_record "$NETWORK" "$SOURCE_ACCOUNT" "$CONTRACT_ID"

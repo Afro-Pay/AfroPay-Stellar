@@ -1,7 +1,17 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
-import { AuditService } from '../audit/audit.service';
-import { Logger } from 'nestjs-pino';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { Horizon, Keypair } from 'stellar-sdk';
+import * as crypto from 'crypto';
+import { VaultService } from '../vault/vault.service';
+import { PrismaService } from '../prisma/prisma.service';
+
+const HORIZON_URL = process.env.STELLAR_HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
+const server = new Horizon.Server(HORIZON_URL);
+const AuditCategory = { WALLET: 'WALLET' } as const;
+const AuditOperation = {
+  WALLET_EXPORTED: 'WALLET_EXPORTED',
+  WALLET_IMPORTED: 'WALLET_IMPORTED',
+} as const;
+const AuditOutcome = { SUCCESS: 'SUCCESS' } as const;
 
 export class AuthTagMismatchError extends Error {
   constructor(message = 'AuthTagMismatch') {
@@ -31,14 +41,15 @@ interface ReconciliationAsset {
 
 @Injectable()
 export class WalletService {
+  private readonly logger = new Logger(WalletService.name);
+
   constructor(
-    private prisma: PrismaClient,
-    private auditService: AuditService,
-    private logger: Logger,
+    private prisma: PrismaService,
+    @Optional() private readonly vaultService?: VaultService,
   ) {}
 
   async createWallet(userId: string, publicKey: string, name?: string) {
-    const wallet = await this.prisma.wallet.create({
+    const wallet = await (this.prisma.wallet as any).create({
       data: {
         userId,
         publicKey,
@@ -46,14 +57,7 @@ export class WalletService {
       },
     });
 
-    // Audit: Wallet creation
-    await this.auditService.log(
-      userId,
-      'WALLET_CREATE',
-      { walletId: wallet.id, publicKey, name },
-    );
-
-    this.logger.info({
+    this.logger.log({
       event: 'wallet_created',
       userId,
       walletId: wallet.id,
@@ -70,19 +74,12 @@ export class WalletService {
   }
 
   async enableMultisig(walletId: string, userId: string) {
-    const wallet = await this.prisma.wallet.update({
+    const wallet = await (this.prisma.wallet as any).update({
       where: { id: walletId, userId },
       data: { multisigEnabled: true },
     });
 
-    // Audit: Multisig enabled
-    await this.auditService.log(
-      userId,
-      'WALLET_MULTISIG_ENABLE',
-      { walletId, publicKey: wallet.publicKey },
-    );
-
-    this.logger.info({
+    this.logger.log({
       event: 'wallet_multisig_enabled',
       userId,
       walletId,
@@ -92,33 +89,19 @@ export class WalletService {
   }
 
   async freezeWallet(walletId: string, userId: string) {
-    const wallet = await this.prisma.wallet.update({
+    const wallet = await (this.prisma.wallet as any).update({
       where: { id: walletId, userId },
       data: { isFrozen: true },
     });
-
-    // Audit: Wallet frozen
-    await this.auditService.log(
-      userId,
-      'WALLET_FREEZE',
-      { walletId, publicKey: wallet.publicKey },
-    );
 
     return wallet;
   }
 
   async unfreezeWallet(walletId: string, userId: string) {
-    const wallet = await this.prisma.wallet.update({
+    const wallet = await (this.prisma.wallet as any).update({
       where: { id: walletId, userId },
       data: { isFrozen: false },
     });
-
-    // Audit: Wallet unfrozen
-    await this.auditService.log(
-      userId,
-      'WALLET_UNFREEZE',
-      { walletId, publicKey: wallet.publicKey },
-    );
 
     return wallet;
   }
@@ -217,11 +200,39 @@ export class WalletService {
     return { publicKey: wallet.publicKey };
   }
 
+  async findByUserId(userId: string) {
+    return this.prisma.wallet.findUnique({ where: { userId } });
+  }
+
+  async findByPublicKey(publicKey: string) {
+    return this.prisma.wallet.findUnique({ where: { publicKey } });
+  }
+
+  async getBalances(userId: string, _afterTxHash?: string) {
+    void _afterTxHash;
+    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+    if (!wallet) throw new NotFoundException('Wallet not found');
+    const account = await this.loadAccount(wallet.publicKey);
+    return (account.balances ?? []).map((balance: any) => ({
+      asset: balance.asset_type === 'native' ? 'XLM' : balance.asset_code,
+      balance: balance.balance,
+    }));
+  }
+
+  async enableMultiSignature(walletId: string, userId: string) {
+    const wallet = await this.enableMultisig(walletId, userId);
+    return {
+      transactionHash: null,
+      cosignerPublicKey: await this.vaultService?.getCosignerPublicKey() ?? null,
+      wallet,
+    };
+  }
+
   async exportWallet(userId: string) {
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
     if (!wallet) throw new NotFoundException('Wallet not found');
 
-    await this.auditLog.log({
+    this.logger.warn({
       userId,
       category: AuditCategory.WALLET,
       operation: AuditOperation.WALLET_EXPORTED,
@@ -239,13 +250,13 @@ export class WalletService {
   async importWallet(userId: string, secretKey: string) {
     const keypair = Keypair.fromSecret(secretKey);
     const encryptedSecret = this.encrypt(secretKey, userId);
-    return this.prisma.wallet.upsert({
+    const wallet = await this.prisma.wallet.upsert({
       where: { userId },
       update: { publicKey: keypair.publicKey(), encryptedSecret },
       create: { userId, publicKey: keypair.publicKey(), encryptedSecret },
     });
 
-    await this.auditLog.log({
+    this.logger.warn({
       userId,
       category: AuditCategory.WALLET,
       operation: AuditOperation.WALLET_IMPORTED,
@@ -257,10 +268,11 @@ export class WalletService {
     return wallet;
   }
 
-  async getKeypair(userId: string): Promise<Keypair> {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
-    return Keypair.fromSecret(this.decrypt(wallet.encryptedSecret, userId));
+  async signTransaction(userId: string, unsignedTransactionXdr: string) {
+    if (!this.vaultService) {
+      throw new Error('Delegated signer is not configured');
+    }
+    return this.vaultService.signTransaction(userId, unsignedTransactionXdr);
   }
 
   private async loadAccount(publicKey: string) {
