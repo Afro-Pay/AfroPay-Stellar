@@ -1,7 +1,7 @@
 use std::env;
 use stellar_sdk::{
     types::{AccountId, Asset, Memo, MemoText, Operation, Transaction},
-    HorizonClient, Keypair, Network, Server,
+    HorizonClient, Keypair, Network,
 };
 
 pub struct StellarService {
@@ -59,186 +59,35 @@ impl StellarService {
             })
             .network(self.network);
 
-        if let Some(memo_text) = memo {
-            transaction = transaction.memo(Memo::Text(MemoText::new(memo_text)?));
-        }
-
-        let transaction = transaction.build()?;
-
-        // Sign based on configuration
-        let signed_transaction = if config.requires_cosign {
-            self.sign_with_multisig(transaction, config)?
-        } else {
-            self.sign_with_single(transaction, config)?
-        };
-
-        Ok(signed_transaction)
-    }
-
-    /// Sign with single keypair (standard flow)
-    fn sign_with_multisig(
-        &self,
-        mut transaction: Transaction,
-        config: &SigningConfig,
-    ) -> Result<Transaction, Box<dyn std::error::Error>> {
-        // Sign with user's key
-        transaction = transaction.sign(&[&config.user_keypair]);
-
-        // Sign with cosigner key
-        if let Some(cosigner) = &config.cosigner_keypair {
-            transaction = transaction.sign(&[cosigner]);
-            println!("✅ Transaction signed with both user and cosigner keys");
-        } else {
-            return Err("Cosigner keypair required for multisig transaction".into());
-        }
-
-        Ok(transaction)
-    }
-
-    /// Sign with single keypair (standard flow)
-    fn sign_with_single(
-        &self,
-        mut transaction: Transaction,
-        config: &SigningConfig,
-    ) -> Result<Transaction, Box<dyn std::error::Error>> {
-        transaction = transaction.sign(&[&config.user_keypair]);
-        println!("✅ Transaction signed with user key only");
-        Ok(transaction)
-    }
-
-    /// Submit a signed transaction to the network
-    pub async fn submit_transaction(
-        &self,
-        transaction: &Transaction,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let response = self.horizon_client.submit_transaction(transaction).await?;
-        Ok(response.hash)
-    }
-
-    /// Enable multi-signature on an account
-    pub async fn enable_multisig(
-        &self,
-        account_id: &str,
-        cosigner_public_key: &str,
-        user_keypair: &Keypair,
-        master_weight: u8,
-        threshold_weight: u8,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let source_account = self.horizon_client.load_account(account_id).await?;
-
-        let transaction = Transaction::builder(&source_account)
-            .operation(Operation::SetOptions {
-                master_weight: Some(master_weight),
-                low_threshold: Some(0),
-                medium_threshold: Some(threshold_weight),
-                high_threshold: Some(threshold_weight),
-                signer: Some((
-                    cosigner_public_key.parse()?,
-                    threshold_weight, // Weight for cosigner
-                )),
-                ..Default::default()
-            })
-            .network(self.network)
-            .build()?
-            .sign(&[user_keypair]);
-
-        let response = self.horizon_client.submit_transaction(&transaction).await?;
-        Ok(response.hash)
-    }
-
-    /// Check if an account has multi-signature enabled
-    pub async fn check_multisig_status(
-        &self,
-        account_id: &str,
-        cosigner_public_key: &str,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        let account = self.horizon_client.load_account(account_id).await?;
-
-        // Check if cosigner is in the signers list
-        for signer in account.signers() {
-            if signer.key == cosigner_public_key {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-}
-
-/// Helper function to determine if transaction requires cosign
-pub fn requires_cosign(amount_usd: f64, threshold_usd: f64) -> bool {
-    amount_usd > threshold_usd
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_requires_cosign() {
-        // Test below threshold
-        assert!(!requires_cosign(5000.0, 10000.0));
-        assert!(!requires_cosign(9999.99, 10000.0));
-
-        // Test at threshold
-        assert!(!requires_cosign(10000.0, 10000.0));
-
-        // Test above threshold
-        assert!(requires_cosign(10000.01, 10000.0));
-        assert!(requires_cosign(15000.0, 10000.0));
-    }
-
-    #[test]
-    fn test_derive_public_key_from_secret_seed() {
-        let secret = "SBVDMZXHTZJ6F5NJZRFCZLWMSCYJ4XNXZPX5RVEVHMVZRQ3Q7BY3TJVU";
-        let public = derive_public_key(secret).expect("secret seed should derive public key");
-        assert_eq!(
-            public,
-            "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
-        );
-    }
-
-    #[test]
-    fn test_build_payment_xdr_round_trip() {
-        use stellar_xdr::{Limits, ReadXdr, TransactionEnvelope};
-
-        let job = crate::models::TransactionJob {
-            id: "test-job".to_string(),
-            user_id: "test-user".to_string(),
-            source_wallet: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
-            destination_wallet: "GBL3Q6QXPWQWUPDZC4ASXA65Y2NHLQYZKSGEKJE7LNZN6XMMVKF5RWYS"
-                .to_string(),
-            amount: "12.3456789".to_string(),
-            asset_code: "XLM".to_string(),
-            asset_issuer: "".to_string(),
-            memo: Some("round-trip".to_string()),
-            requires_cosign: false,
-            threshold_usd: None,
-        };
-
-        let xdr = build_payment_xdr(
-            &job,
-            "SBVDMZXHTZJ6F5NJZRFCZLWMSCYJ4XNXZPX5RVEVHMVZRQ3Q7BY3TJVU",
-            12345,
-            TESTNET_PASSPHRASE,
-        )
-        .expect("payment XDR should be built");
-
-        let envelope = TransactionEnvelope::from_xdr_base64(&xdr, Limits::none())
-            .expect("payment XDR should decode");
-        match envelope {
-            TransactionEnvelope::Tx(envelope) => {
-                assert_eq!(envelope.tx.seq_num.0, 12346);
-                assert_eq!(envelope.signatures.len(), 1);
-            }
-            _ => panic!("expected v1 transaction envelope"),
-        }
-    }
-}
-
 /// Stroops charged per operation for a simple payment transaction.
 const BASE_FEE_STROOPS: u32 = 100;
 pub const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
 pub const PUBLIC_PASSPHRASE: &str = "Public Global Stellar Network ; September 2015";
+
+/// How many times to resubmit a transaction after a `tx_bad_seq` response before giving up.
+const MAX_SEQUENCE_RETRIES: u32 = 3;
+
+/// Errors returned while submitting a payment to Horizon.
+#[derive(Debug, Error)]
+pub enum SubmitError {
+    #[error("horizon request failed: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("failed to build transaction: {0}")]
+    Build(String),
+    #[error("horizon returned an unexpected response: {0}")]
+    UnexpectedResponse(String),
+    /// The transaction was rejected in a way that will never succeed by retrying
+    /// (e.g. the source account doesn't have enough balance to cover the payment).
+    #[error("transaction permanently failed: {0}")]
+    PermanentFailure(String),
+    #[error("gave up after {0} attempts due to repeated tx_bad_seq responses")]
+    RetriesExhausted(u32),
+}
+
+enum SubmitOutcome {
+    Success(String),
+    RetryWithFreshSequence,
+}
 
 /// Derive a Stellar account ID (G...) from a Stellar secret seed (S...).
 pub fn derive_public_key(secret: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -248,7 +97,113 @@ pub fn derive_public_key(secret: &str) -> Result<String, Box<dyn std::error::Err
     let seed = PrivateKey::from_string(secret)?;
     let signing_key = SigningKey::from_bytes(&seed.0);
     let verifying_key = signing_key.verifying_key();
-    Ok(PublicKey(verifying_key.to_bytes()).to_string())
+    Ok(format!("{}", PublicKey(verifying_key.to_bytes())))
+}
+
+/// Fetch the current sequence number for an account from Horizon.
+async fn fetch_sequence(
+    client: &reqwest::Client,
+    horizon_base_url: &str,
+    account_id: &str,
+) -> Result<i64, SubmitError> {
+    let url = format!(
+        "{}/accounts/{}",
+        horizon_base_url.trim_end_matches('/'),
+        account_id
+    );
+    let response = client.get(&url).send().await?;
+    if !response.status().is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(SubmitError::UnexpectedResponse(format!(
+            "failed to load account {}: {}",
+            account_id, body
+        )));
+    }
+
+    let value: serde_json::Value = response.json().await?;
+    let sequence = value
+        .get("sequence")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            SubmitError::UnexpectedResponse("account response missing sequence field".into())
+        })?;
+    sequence.parse::<i64>().map_err(|e| {
+        SubmitError::UnexpectedResponse(format!("invalid sequence number '{}': {}", sequence, e))
+    })
+}
+
+/// Submit a signed transaction envelope (base64 XDR) to Horizon and classify the result.
+async fn submit_xdr(
+    client: &reqwest::Client,
+    horizon_base_url: &str,
+    xdr: &str,
+) -> Result<SubmitOutcome, SubmitError> {
+    let url = format!("{}/transactions", horizon_base_url.trim_end_matches('/'));
+    let response = client.post(&url).form(&[("tx", xdr)]).send().await?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().await?;
+
+    if status.is_success() {
+        let hash = body
+            .get("hash")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                SubmitError::UnexpectedResponse("success response missing hash field".into())
+            })?;
+        return Ok(SubmitOutcome::Success(hash.to_string()));
+    }
+
+    let tx_result_code = body
+        .pointer("/extras/result_codes/transaction")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    match tx_result_code.as_str() {
+        "tx_bad_seq" => Ok(SubmitOutcome::RetryWithFreshSequence),
+        other => Err(SubmitError::PermanentFailure(format!(
+            "horizon rejected transaction: {}",
+            other
+        ))),
+    }
+}
+
+/// Build, sign and submit a Stellar payment for `job`, retrying with a refreshed
+/// sequence number when Horizon reports `tx_bad_seq`, and treating any other
+/// rejection (e.g. `tx_insufficient_balance`) as permanent — no further retries.
+pub async fn submit_transaction(
+    client: &reqwest::Client,
+    horizon_base_url: &str,
+    job: &crate::models::TransactionJob,
+    source_secret: &str,
+    network_passphrase: &str,
+) -> Result<String, SubmitError> {
+    let source_account =
+        derive_public_key(source_secret).map_err(|e| SubmitError::Build(e.to_string()))?;
+
+    for attempt in 1..=MAX_SEQUENCE_RETRIES {
+        let sequence = fetch_sequence(client, horizon_base_url, &source_account).await?;
+        let xdr = build_payment_xdr(job, source_secret, sequence, network_passphrase)
+            .map_err(|e| SubmitError::Build(e.to_string()))?;
+
+        match submit_xdr(client, horizon_base_url, &xdr).await? {
+            SubmitOutcome::Success(hash) => return Ok(hash),
+            SubmitOutcome::RetryWithFreshSequence => {
+                if attempt == MAX_SEQUENCE_RETRIES {
+                    return Err(SubmitError::RetriesExhausted(attempt));
+                }
+                // Loop again: the next iteration re-fetches the sequence number.
+            }
+        }
+    }
+
+    Err(SubmitError::RetriesExhausted(MAX_SEQUENCE_RETRIES))
+}
+
+/// Determine if a transaction requires a cosigner based on its USD amount and a threshold.
+#[allow(dead_code)]
+pub fn requires_cosign(amount_usd: f64, threshold_usd: f64) -> bool {
+    amount_usd > threshold_usd
 }
 
 /// Build and sign a Stellar payment transaction envelope as Horizon-ready base64 XDR.
@@ -261,7 +216,7 @@ pub fn build_payment_xdr(
     use ed25519_dalek::{Signer, SigningKey};
     use sha2::{Digest, Sha256};
     use stellar_strkey::ed25519::{PrivateKey, PublicKey};
-    use stellar_xdr::{
+    use stellar_xdr::curr::{
         DecoratedSignature, Limits, Memo as XdrMemo, MuxedAccount, Operation as XdrOperation,
         OperationBody, PaymentOp, Preconditions, SequenceNumber, Signature, SignatureHint,
         TimeBounds, TimePoint, Transaction as XdrTransaction, TransactionEnvelope, TransactionExt,
@@ -324,9 +279,9 @@ pub fn build_payment_xdr(
 fn build_xdr_asset(
     code: &str,
     issuer: &str,
-) -> Result<stellar_xdr::Asset, Box<dyn std::error::Error>> {
+) -> Result<stellar_xdr::curr::Asset, Box<dyn std::error::Error>> {
     use stellar_strkey::ed25519::PublicKey;
-    use stellar_xdr::{
+    use stellar_xdr::curr::{
         AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4,
         PublicKey as XdrPublicKey, Uint256,
     };
@@ -361,9 +316,9 @@ fn build_xdr_asset(
     }
 }
 
-fn build_xdr_memo(memo: &str) -> Result<stellar_xdr::Memo, Box<dyn std::error::Error>> {
-    use stellar_xdr::{Memo, StringM};
-    if memo.as_bytes().len() > 28 {
+fn build_xdr_memo(memo: &str) -> Result<stellar_xdr::curr::Memo, Box<dyn std::error::Error>> {
+    use stellar_xdr::curr::{Memo, StringM};
+    if memo.len() > 28 {
         return Err("Stellar text memo must be 28 bytes or fewer".into());
     }
     Ok(Memo::Text(StringM::try_from(memo.to_string())?))
@@ -383,4 +338,70 @@ fn parse_stellar_amount(amount: &str) -> Result<i64, Box<dyn std::error::Error>>
         frac_padded.push('0');
     }
     Ok(whole_stroops + frac_padded.parse::<i64>()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_requires_cosign() {
+        // Test below threshold
+        assert!(!requires_cosign(5000.0, 10000.0));
+        assert!(!requires_cosign(9999.99, 10000.0));
+
+        // Test at threshold
+        assert!(!requires_cosign(10000.0, 10000.0));
+
+        // Test above threshold
+        assert!(requires_cosign(10000.01, 10000.0));
+        assert!(requires_cosign(15000.0, 10000.0));
+    }
+
+    #[test]
+    fn test_derive_public_key_from_secret_seed() {
+        let secret = "SADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP54X";
+        let public = derive_public_key(secret).expect("secret seed should derive public key");
+        assert_eq!(
+            public,
+            "GDVEU3DD4KOFECV66VIHWEZOYX4ZKR3WV27L464SIIPOU2IUI3JCZA57"
+        );
+    }
+
+    #[test]
+    fn test_build_payment_xdr_round_trip() {
+        use stellar_xdr::curr::{Limits, ReadXdr, TransactionEnvelope};
+
+        let job = crate::models::TransactionJob {
+            id: "test-job".to_string(),
+            user_id: "test-user".to_string(),
+            source_wallet: "GDVEU3DD4KOFECV66VIHWEZOYX4ZKR3WV27L464SIIPOU2IUI3JCZA57".to_string(),
+            destination_wallet: "GD6ROJBYLKQMOW3E7N4M2YBPUHMZD7PL65VRHRMO24BOVSBV5H3BQRSL"
+                .to_string(),
+            amount: "12.3456789".to_string(),
+            asset_code: "XLM".to_string(),
+            asset_issuer: "".to_string(),
+            memo: Some("round-trip".to_string()),
+            requires_cosign: false,
+            threshold_usd: None,
+        };
+
+        let xdr = build_payment_xdr(
+            &job,
+            "SADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP54X",
+            12345,
+            TESTNET_PASSPHRASE,
+        )
+        .expect("payment XDR should be built");
+
+        let envelope = TransactionEnvelope::from_xdr_base64(&xdr, Limits::none())
+            .expect("payment XDR should decode");
+        match envelope {
+            TransactionEnvelope::Tx(envelope) => {
+                assert_eq!(envelope.tx.seq_num.0, 12346);
+                assert_eq!(envelope.signatures.len(), 1);
+            }
+            _ => panic!("expected v1 transaction envelope"),
+        }
+    }
 }

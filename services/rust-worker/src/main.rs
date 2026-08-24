@@ -1,74 +1,54 @@
+mod env;
+#[cfg(test)]
+mod integration_tests;
 mod metrics;
 mod models;
 mod queue;
-mod stellar;
+mod lock_manager;
 
 use dotenv::dotenv;
 use std::env;
+use redis::Client;
 use stellar_sdk::Keypair;
 use stellar::StellarService;
 use queue::QueueService;
+use lock_manager::LockManager;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
 
-    // Initialise all Lazy statics so they appear in the first scrape even
-    // before any traffic arrives.
-    let _ = &*metrics::QUEUE_DEPTH;
-    let _ = &*metrics::TX_LATENCY_SECONDS;
-    let _ = &*metrics::TX_SUCCESS_TOTAL;
-    let _ = &*metrics::TX_FAILURE_TOTAL;
-    let _ = &*metrics::HORIZON_ERRORS_TOTAL;
-    let _ = &*metrics::JOBS_PROCESSED_TOTAL;
-    let _ = &*metrics::ACTIVE_WORKERS;
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
-    println!("🚀 Starting Rust Worker with Multi-Signature Support");
+    info!("Starting Rust Worker with Horizon SSE Streaming");
 
-    // Spawn the Prometheus /metrics HTTP server as a background task.
-    // It runs indefinitely on METRICS_PORT (default 9898).
-    tokio::spawn(metrics::serve());
+    db::validate_env();
 
     let stellar_service = StellarService::new();
     let queue_service = QueueService::new().await?;
+    let db_pool = db::create_pool().await?;
 
-    // Load cosigner keypair (if configured)
-    let cosigner_keypair = if let Ok(cosigner_secret) = env::var("COSIGNER_SECRET") {
-        println!("✅ Cosigner keypair loaded from environment");
-        Some(Keypair::from_secret(&cosigner_secret)?)
-    } else {
-        println!("ℹ️  No cosigner key configured — multi-sig disabled");
-        None
-    };
-
-    let threshold_usd = env::var("MULTISIG_THRESHOLD_USD")
-        .unwrap_or_else(|_| "10000".to_string())
-        .parse::<f64>()
-        .unwrap_or(10000.0);
-
-    println!("📊 Multi-sig threshold: ${} USD", threshold_usd);
-
-    // Spawn the queue listener as a long-running concurrent task alongside the
-    // legacy QueueService loop.  Both operate on the same Redis key; the
-    // queue::listen() path also updates the metrics gauges.
-    // NOTE: when fully migrated, remove the QueueService loop below and keep
-    // only queue::listen().
-    tokio::spawn(async {
-        if let Err(e) = queue::listen().await {
-            eprintln!("❌ Queue listener exited with error: {}", e);
+    // Start Horizon SSE listener in background
+    let sse_db_pool = db_pool.clone();
+    tokio::spawn(async move {
+        if let Err(e) = sse::start_transaction_listener(sse_db_pool).await {
+            tracing::error!("SSE listener terminated with error: {}", e);
         }
     });
 
-    // Legacy processing loop (kept for backward-compat with QueueService).
+    info!("Worker started. Processing transactions from queue...");
+
     loop {
         match queue_service.receive_job().await {
             Ok(Some(job)) => {
-                println!("📋 Processing job: {}", job.id);
-                metrics::ACTIVE_WORKERS.inc();
-                if let Err(e) =
-                    process_job(&stellar_service, job, &cosigner_keypair, threshold_usd).await
-                {
-                    eprintln!("❌ Job failed: {}", e);
+                info!("Processing job: {}", job.id);
+                if let Err(e) = process_job(&stellar_service, job, &db_pool).await {
+                    tracing::error!("Job failed: {}", e);
                 }
                 metrics::ACTIVE_WORKERS.dec();
             }
@@ -76,10 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             }
             Err(e) => {
-                eprintln!("❌ Queue error: {}", e);
-                metrics::TX_FAILURE_TOTAL
-                    .with_label_values(&["connection_error"])
-                    .inc();
+                tracing::error!("Queue error: {}", e);
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
         }
@@ -88,114 +65,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn process_job(
     stellar_service: &StellarService,
-    job: models::TransactionJob,
-    cosigner_keypair: &Option<Keypair>,
-    _threshold_usd: f64,
+    job: TransactionJob,
+    db_pool: &Arc<sqlx::PgPool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use std::time::Instant;
+    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+    let lock_manager = LockManager::new(Client::open(redis_url)?);
+    let lock = lock_manager
+        .acquire(format!("lock:escrow:{}", job.id))
+        .await?;
 
-    let user_secret = env::var("USER_SECRET_KEY").expect("USER_SECRET_KEY must be set");
-    let user_keypair = Keypair::from_secret(&user_secret)?;
+    // Load user's keypair (in production, securely retrieve from vault)
+    let user_secret = env::var("USER_SECRET_KEY")
+        .expect("USER_SECRET_KEY must be set");
+    let user_keypair = stellar_sdk::Keypair::from_secret(&user_secret)?;
+
+    let cosigner_keypair = if let Ok(cosigner_secret) = env::var("COSIGNER_SECRET") {
+        Some(stellar_sdk::Keypair::from_secret(&cosigner_secret)?)
+    } else {
+        None
+    };
 
     let requires_cosign = job.requires_cosign;
 
     let config = stellar::SigningConfig {
         requires_cosign,
         user_keypair,
-        cosigner_keypair: cosigner_keypair.clone(),
+        cosigner_keypair,
     };
 
-    let start = Instant::now();
+    // Update status to submitting
+    db::update_transaction_status(db_pool, &job.id, "submitting").await?;
 
-    let transaction = match stellar_service
-        .build_transaction(
-            &job.source_wallet,
-            &job.destination_wallet,
-            &job.amount,
-            &job.asset_code,
-            &job.asset_issuer,
-            job.memo.as_deref(),
-            &config,
-        )
-        .await
-    {
-        Ok(tx) => tx,
-        Err(e) => {
-            metrics::TX_FAILURE_TOTAL
-                .with_label_values(&["signing_error"])
-                .inc();
-            metrics::JOBS_PROCESSED_TOTAL
-                .with_label_values(&["stellar_jobs"])
-                .inc();
-            return Err(e);
-        }
-    };
+    let transaction = stellar_service.build_transaction(
+        &job.source_wallet,
+        &job.destination_wallet,
+        &job.amount,
+        &job.asset_code,
+        &job.asset_issuer,
+        job.memo.as_deref(),
+        &config,
+    ).await?;
 
-    match stellar_service.submit_transaction(&transaction).await {
-        Ok(hash) => {
-            let elapsed = start.elapsed().as_secs_f64();
-            metrics::TX_LATENCY_SECONDS.observe(elapsed);
-            metrics::TX_SUCCESS_TOTAL
-                .with_label_values(&[&job.asset_code])
-                .inc();
-            metrics::JOBS_PROCESSED_TOTAL
-                .with_label_values(&["stellar_jobs"])
-                .inc();
+    let hash = stellar_service.submit_transaction(&transaction).await?;
+    
+    println!("✅ Transaction submitted successfully!");
+    println!("   Hash: {}", hash);
+    println!("   Signatures: {}", if requires_cosign { 2 } else { 1 });
 
-            println!("✅ Transaction submitted successfully!");
-            println!("   Hash: {}", hash);
-            println!(
-                "   Signatures: {}",
-                if requires_cosign { 2 } else { 1 }
-            );
-            Ok(())
-        }
-        Err(e) => {
-            let elapsed = start.elapsed().as_secs_f64();
-            metrics::TX_LATENCY_SECONDS.observe(elapsed);
-
-            // Classify the error for the horizon_errors_total label.
-            let error_str = e.to_string();
-            let (error_type, status_code) = classify_error(&error_str);
-            metrics::TX_FAILURE_TOTAL
-                .with_label_values(&[error_type])
-                .inc();
-            if let Some(code) = status_code {
-                metrics::HORIZON_ERRORS_TOTAL
-                    .with_label_values(&[code])
-                    .inc();
-            }
-            metrics::JOBS_PROCESSED_TOTAL
-                .with_label_values(&["stellar_jobs"])
-                .inc();
-
-            Err(e)
-        }
-    }
-}
-
-/// Classify a stringified error into an `error_type` label and an optional
-/// Horizon HTTP `status_code` label.
-fn classify_error(msg: &str) -> (&'static str, Option<&'static str>) {
-    if msg.contains("400") {
-        ("horizon_error", Some("400"))
-    } else if msg.contains("401") || msg.contains("403") {
-        ("horizon_error", Some("401"))
-    } else if msg.contains("404") {
-        ("horizon_error", Some("404"))
-    } else if msg.contains("429") {
-        ("horizon_error", Some("429"))
-    } else if msg.contains("500") {
-        ("horizon_error", Some("500"))
-    } else if msg.contains("502") || msg.contains("503") || msg.contains("504") {
-        ("horizon_error", Some("502"))
-    } else if msg.contains("timeout") || msg.contains("timed out") {
-        ("timeout", None)
-    } else if msg.contains("connection") || msg.contains("connect") {
-        ("connection_error", None)
-    } else if msg.contains("sign") || msg.contains("keypair") {
-        ("signing_error", None)
-    } else {
-        ("unknown", None)
-    }
+    lock.release().await?;
+    
+    Ok(())
 }

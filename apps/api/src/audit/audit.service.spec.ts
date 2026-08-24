@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { PrismaService } from '../prisma/prisma.service';
 import {
   AuditLogService,
   AuditCategory,
@@ -33,12 +34,10 @@ describe('AuditLogService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuditLogService,
+        { provide: PrismaService, useValue: mockPrisma },
         { provide: 'PrismaService', useValue: mockPrisma },
       ],
-    })
-      .overrideProvider('PrismaService')
-      .useValue(mockPrisma)
-      .compile();
+    }).compile();
 
     // Manually construct with mock because NestJS DI token is PrismaService class.
     service = new AuditLogService(mockPrisma as any);

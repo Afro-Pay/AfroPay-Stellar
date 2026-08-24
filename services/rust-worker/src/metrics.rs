@@ -7,9 +7,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use warp::Filter;
 
-// ---------------------------------------------------------------------------
-// Registry
-// ---------------------------------------------------------------------------
+pub static REGISTRY: Lazy<Registry> = Lazy::new(Registry::new);
 
 pub static REGISTRY: Lazy<Registry> = Lazy::new(Registry::new);
 
@@ -84,83 +82,25 @@ pub static TX_FAILURE_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     c
 });
 
-// ---------------------------------------------------------------------------
-// Horizon error metrics
-// ---------------------------------------------------------------------------
-
-/// Count of HTTP errors returned by Stellar Horizon, partitioned by
-/// HTTP status code.  Useful for distinguishing 400-class (bad tx) from
-/// 502/503 (Horizon downtime).
-pub static HORIZON_ERRORS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
-    let c = IntCounterVec::new(
-        Opts::new(
-            "afropay_worker_horizon_errors_total",
-            "Total number of HTTP errors received from Stellar Horizon",
-        ),
-        &["status_code"],
-    )
-    .expect("create afropay_worker_horizon_errors_total counter");
+pub static SSE_EVENTS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    let c = IntCounter::with_opts(Opts::new("sse_events_total", "Total SSE events received from Horizon")).expect("create counter");
     REGISTRY.register(Box::new(c.clone())).ok();
     c
 });
 
-// ---------------------------------------------------------------------------
-// Throughput / rate helper
-// ---------------------------------------------------------------------------
-
-/// Jobs processed per scrape interval.  Prometheus will derive a rate()
-/// from this monotonic counter; we expose it separately from success/failure
-/// so the denominator is always available even when success+failure counters
-/// have different label cardinalities.
-pub static JOBS_PROCESSED_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
-    let c = IntCounterVec::new(
-        Opts::new(
-            "afropay_worker_jobs_processed_total",
-            "Total number of jobs dequeued and processed (success + failure)",
-        ),
-        &["queue"],
-    )
-    .expect("create afropay_worker_jobs_processed_total counter");
+pub static SSE_STATUS_UPDATES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    let c = IntCounter::with_opts(Opts::new("sse_status_updates_total", "Total status updates via SSE")).expect("create counter");
     REGISTRY.register(Box::new(c.clone())).ok();
     c
 });
 
-// ---------------------------------------------------------------------------
-// Worker concurrency
-// ---------------------------------------------------------------------------
-
-/// Number of Tokio tasks currently executing a Stellar submission.
-pub static ACTIVE_WORKERS: Lazy<Gauge> = Lazy::new(|| {
-    let g = Gauge::with_opts(
-        Opts::new(
-            "afropay_worker_active_tasks",
-            "Number of concurrently running Stellar submission tasks",
-        ),
-    )
-    .expect("create afropay_worker_active_tasks gauge");
-    REGISTRY.register(Box::new(g.clone())).ok();
-    g
+pub static SSE_ERRORS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    let c = IntCounter::with_opts(Opts::new("sse_errors_total", "Total SSE processing errors")).expect("create counter");
+    REGISTRY.register(Box::new(c.clone())).ok();
+    c
 });
 
-// ---------------------------------------------------------------------------
-// Legacy aliases kept so queue.rs compiles unchanged
-// ---------------------------------------------------------------------------
-
-/// Backward-compat shim: queue.rs still references QUEUE_DEPTH as an IntGauge.
-/// We redirect calls through the labelled GaugeVec above.
-pub mod compat {
-    use super::*;
-
-    /// Increment/decrement helpers that forward to the labelled GaugeVec.
-    pub fn queue_depth_set(v: i64) {
-        set_queue_depth(v);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Metrics HTTP server
-// ---------------------------------------------------------------------------
-
+#[allow(dead_code)]
 pub async fn serve() {
     let port: u16 = std::env::var("METRICS_PORT")
         .ok()
