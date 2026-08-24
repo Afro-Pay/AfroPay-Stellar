@@ -32,14 +32,33 @@ enum KycTier {
   FULL
 }
 
+enum UserRole {
+  USER
+  ADMIN
+}
+
 model User {
   id           String        @id @default(uuid())
   email        String        @unique
   password     String
+  name         String?
+  role         UserRole      @default(USER)
+  erasedAt     DateTime?
   createdAt    DateTime      @default(now())
   wallet       Wallet?
   transactions Transaction[]
   kyc          KycRecord?
+}
+
+/// Non-reversible lookup record used to make erasure idempotent after the
+/// original user identifier has been replaced. Never store the original ID.
+model AnonymizationTombstone {
+  id                  String   @id @default(uuid())
+  originalUserIdHash  String   @unique
+  pseudonymousUserId  String   @unique
+  erasedAt            DateTime @default(now())
+
+  @@index([erasedAt])
 }
 
 model Wallet {
@@ -108,7 +127,14 @@ model KycRecord {
   status          KycStatus     @default(PENDING)
   tier            KycTier       @default(NONE)
   documentType    String?
+  /// SHA-256 hex digest of the uploaded document, prefixed with the S3 object
+  /// key: "<s3-key>:<sha256-hex>". Set by POST /kyc/confirm-upload after hash
+  /// verification. Null until the upload is confirmed.
   documentRef     String?
+  firstName       String?
+  lastName        String?
+  idType          String?
+  photoId         String?
   submittedAt     DateTime?
   reviewedAt      DateTime?
   rejectionReason String?

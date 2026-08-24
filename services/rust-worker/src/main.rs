@@ -1,13 +1,16 @@
 mod models;
 mod stellar;
 mod queue;
+mod lock_manager;
 
 use dotenv::dotenv;
 use std::env;
+use redis::Client;
 use stellar_sdk::Keypair;
 use stellar::StellarService;
 use models::TransactionJob;
 use queue::QueueService;
+use lock_manager::LockManager;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -60,6 +63,12 @@ async fn process_job(
     cosigner_keypair: &Option<Keypair>,
     threshold_usd: f64,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+    let lock_manager = LockManager::new(Client::open(redis_url)?);
+    let lock = lock_manager
+        .acquire(format!("lock:escrow:{}", job.id))
+        .await?;
+
     // Load user's keypair (in production, securely retrieve from vault)
     let user_secret = env::var("USER_SECRET_KEY")
         .expect("USER_SECRET_KEY must be set");
@@ -91,6 +100,8 @@ async fn process_job(
     println!("✅ Transaction submitted successfully!");
     println!("   Hash: {}", hash);
     println!("   Signatures: {}", if requires_cosign { 2 } else { 1 });
+
+    lock.release().await?;
     
     Ok(())
 }

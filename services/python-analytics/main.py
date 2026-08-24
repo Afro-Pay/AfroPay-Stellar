@@ -25,6 +25,8 @@ validate_env()
 
 from fastapi import FastAPI
 from app.routes import router
+from app.compliance import router as compliance_router
 
 app = FastAPI(title="AfroPay Fraud Detection")
 app.include_router(router, prefix="/fraud")
+app.include_router(compliance_router, prefix="/compliance")

@@ -27,6 +27,7 @@ describe('JwtStrategy', () => {
     ).toEqual({
       userId: 'user-123',
       email: 'user@example.com',
+      role: 'USER',
     });
   });
 
@@ -39,6 +40,19 @@ describe('JwtStrategy', () => {
     ).toEqual({
       userId: 'user-123',
       email: 'user@example.com',
+      role: 'USER',
+    });
+  });
+
+  it('preserves the ADMIN role for authorization guards', () => {
+    expect(strategy.validate({
+      sub: 'admin-123',
+      email: 'admin@example.com',
+      role: 'ADMIN',
+    })).toEqual({
+      userId: 'admin-123',
+      email: 'admin@example.com',
+      role: 'ADMIN',
     });
   });
 
