@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Post, Request, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiProperty } from '@nestjs/swagger';
 import { KycService, KycSubmitDto } from './kyc.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import {
@@ -16,28 +17,49 @@ enum DocumentType {
 }
 
 class SubmitKycDto implements KycSubmitDto {
+  @ApiProperty({
+    description: 'Type of identity document',
+    enum: DocumentType,
+    example: DocumentType.PASSPORT,
+  })
   @IsEnum(DocumentType)
   documentType: string;
 
+  @ApiProperty({
+    description: 'URL or reference to the uploaded document',
+    example: 's3://bucket/kyc-docs/user-123/passport.pdf',
+    required: false,
+  })
   @IsOptional()
   @IsString()
   documentUrl?: string;
 }
 
 class UploadUrlDto {
-  /** MIME type of the document to upload (e.g. "image/jpeg", "application/pdf"). */
+  @ApiProperty({
+    description: 'MIME type of the document to upload',
+    example: 'image/jpeg',
+    examples: ['image/jpeg', 'image/png', 'application/pdf'],
+  })
   @IsString()
   @MaxLength(64)
   contentType: string;
 }
 
 class ConfirmUploadDto {
-  /** S3 object key returned by POST /kyc/upload-url. */
+  @ApiProperty({
+    description: 'S3 object key returned by POST /kyc/upload-url',
+    example: 'kyc-docs/user-123/doc-uuid.jpg',
+  })
   @IsString()
   @MaxLength(512)
   s3Key: string;
 
-  /** SHA-256 hex digest (64 lowercase hex chars) computed by the client. */
+  @ApiProperty({
+    description: 'SHA-256 hex digest computed by the client',
+    example: 'a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890',
+    pattern: '^[0-9a-fA-F]{64}$',
+  })
   @IsString()
   @Matches(/^[0-9a-fA-F]{64}$/, {
     message: 'sha256 must be exactly 64 hexadecimal characters',
@@ -45,12 +67,18 @@ class ConfirmUploadDto {
   sha256: string;
 }
 
+@ApiTags('kyc')
 @Controller('kyc')
+@UseGuards(JwtAuthGuard)
+@ApiBearerAuth('JWT-auth')
 export class KycController {
   constructor(private kycService: KycService) {}
 
   @Post('submit')
-  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Submit KYC documentation for verification' })
+  @ApiResponse({ status: 201, description: 'KYC submission received' })
+  @ApiResponse({ status: 400, description: 'Invalid document data' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
   async submitKyc(@Request() req: any, @Body() dto: SubmitKycDto) {
     const record = await this.kycService.submitKyc(req.user.userId, {
       documentType: dto.documentType,
@@ -66,7 +94,10 @@ export class KycController {
   }
 
   @Get('status')
-  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get current KYC verification status' })
+  @ApiResponse({ status: 200, description: 'KYC status retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'No KYC record found' })
   async getStatus(@Request() req: any) {
     return this.kycService.getKycStatus(req.user.userId);
   }
@@ -86,7 +117,13 @@ export class KycController {
    *   - maxSizeBytes
    */
   @Post('upload-url')
-  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ 
+    summary: 'Generate presigned S3 upload URL for KYC document',
+    description: 'Returns a presigned URL valid for 15 minutes to upload document directly to S3'
+  })
+  @ApiResponse({ status: 201, description: 'Presigned URL generated successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid content type' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getUploadUrl(@Request() req: any, @Body() dto: UploadUrlDto) {
     const result = await this.kycService.generateUploadUrl(
       req.user.userId,
@@ -115,7 +152,14 @@ export class KycController {
    *   - verifiedAt   – ISO-8601 timestamp of verification
    */
   @Post('confirm-upload')
-  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ 
+    summary: 'Confirm document upload with hash verification',
+    description: 'Verifies SHA-256 hash of uploaded document and stores reference'
+  })
+  @ApiResponse({ status: 201, description: 'Document verified and stored' })
+  @ApiResponse({ status: 400, description: 'Hash mismatch or invalid data' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Document not found in S3' })
   async confirmUpload(@Request() req: any, @Body() dto: ConfirmUploadDto) {
     const result = await this.kycService.confirmUpload(
       req.user.userId,

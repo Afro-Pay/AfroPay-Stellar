@@ -209,6 +209,32 @@ jobs:
         env:
           WASM_SIZE_LIMIT_KB: ${{ env.WASM_SIZE_LIMIT_KB }}
 
+  rust-worker-tests:
+    name: Rust Worker Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            services/rust-worker/target
+          key: ${{ runner.os }}-cargo-rust-worker-${{ hashFiles('services/rust-worker/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-rust-worker-
+
+      - name: Run rust-worker tests
+        working-directory: services/rust-worker
+        run: cargo test --locked
+        env:
+          RUST_BACKTRACE: 1
+
   contract-clippy:
     name: Cargo Clippy (contracts + rust-worker)
     runs-on: ubuntu-latest

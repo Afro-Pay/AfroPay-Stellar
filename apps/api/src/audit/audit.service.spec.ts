@@ -1,6 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Logger } from 'nestjs-pino';
-import { PrismaClient } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 import {
   AuditCategory,
   AuditLogService,
@@ -53,12 +52,6 @@ const makePrismaMock = () => {
   };
 };
 
-const mockLogger = {
-  info: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn(),
-};
-
 describe('AuditLogService', () => {
   let service: AuditLogService;
   let prismaMock: ReturnType<typeof makePrismaMock>['mocks'];
@@ -71,8 +64,7 @@ describe('AuditLogService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuditLogService,
-        { provide: PrismaClient, useValue: prismaMock },
-        { provide: Logger, useValue: mockLogger },
+        { provide: PrismaService, useValue: prismaMock },
       ],
     }).compile();
 
@@ -172,8 +164,8 @@ describe('AuditLogService', () => {
     // same canonical payload when starting from the same (empty) chain.
     const first = makePrismaMock();
     const second = makePrismaMock();
-    const svcA = new AuditLogService(first.mocks as any, mockLogger as any);
-    const svcB = new AuditLogService(second.mocks as any, mockLogger as any);
+    const svcA = new AuditLogService(first.mocks as any);
+    const svcB = new AuditLogService(second.mocks as any);
 
     await svcA.log({
       userId: 'u',

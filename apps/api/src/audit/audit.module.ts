@@ -1,11 +1,13 @@
 import { Module, Global } from '@nestjs/common';
-import { AuditLogService } from './audit.service';
+import { AuditService } from './audit.service';
 import { PrismaClient } from '@prisma/client';
+import { PrismaModule } from '../prisma/prisma.module';
 import { LoggerModule } from 'nestjs-pino';
 
 @Global()
 @Module({
   imports: [
+    PrismaModule,
     LoggerModule.forRoot({
       pinoHttp: {
         transport: process.env.NODE_ENV !== 'production'
@@ -19,7 +21,7 @@ import { LoggerModule } from 'nestjs-pino';
     }),
   ],
   providers: [
-    AuditLogService,
+    AuditService,
     {
       provide: PrismaClient,
       useFactory: () => {
@@ -31,6 +33,6 @@ import { LoggerModule } from 'nestjs-pino';
       },
     },
   ],
-  exports: [AuditLogService],
+  exports: [AuditService],
 })
 export class AuditModule {}

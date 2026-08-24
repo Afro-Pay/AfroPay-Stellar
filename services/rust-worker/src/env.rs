@@ -2,8 +2,9 @@ use std::process;
 
 pub fn validate_env() {
     let required = [
-        ("REDIS_URL", "Redis connection string (e.g. redis://localhost:6379)"),
-        ("STELLAR_HORIZON_URL", "Stellar Horizon API URL (e.g. https://horizon-testnet.stellar.org)"),
+        ("DATABASE_URL", "PostgreSQL connection string"),
+        ("REDIS_URL", "Redis connection string"),
+        ("HORIZON_URL", "Stellar Horizon API URL"),
     ];
 
     let mut missing: Vec<&str> = Vec::new();

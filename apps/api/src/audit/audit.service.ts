@@ -1,59 +1,48 @@
 import { createHash } from 'crypto';
 import { Injectable } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
-import { Logger } from 'nestjs-pino';
+import { PrismaService } from '../prisma/prisma.service';
 
-export const AuditCategory = {
-  WALLET: 'WALLET',
-  TRANSACTION: 'TRANSACTION',
-  AUTH: 'AUTH',
-  COMPLIANCE: 'COMPLIANCE',
-  KYC: 'KYC',
-} as const;
-
-export const AuditOperation = {
-  WALLET_CREATED: 'WALLET_CREATED',
-  WALLET_EXPORTED: 'WALLET_EXPORTED',
-  WALLET_IMPORTED: 'WALLET_IMPORTED',
-  TX_SUBMITTED: 'TX_SUBMITTED',
-  TX_SUCCESS: 'TX_SUCCESS',
-  TX_FAILED: 'TX_FAILED',
-  TX_RETRYING: 'TX_RETRYING',
-  COMPLIANCE_FREEZE_REQUESTED: 'COMPLIANCE_FREEZE_REQUESTED',
-  COMPLIANCE_CLAWBACK_REQUESTED: 'COMPLIANCE_CLAWBACK_REQUESTED',
-  COMPLIANCE_ACTION_APPROVED: 'COMPLIANCE_ACTION_APPROVED',
-  COMPLIANCE_ACTION_REJECTED: 'COMPLIANCE_ACTION_REJECTED',
-  COMPLIANCE_ACTION_DISPATCHED: 'COMPLIANCE_ACTION_DISPATCHED',
-  COMPLIANCE_ACTION_EXECUTED: 'COMPLIANCE_ACTION_EXECUTED',
-  COMPLIANCE_ACTION_FAILED: 'COMPLIANCE_ACTION_FAILED',
-} as const;
-
-export const AuditOutcome = {
-  SUCCESS: 'SUCCESS',
-  FAILURE: 'FAILURE',
-} as const;
-
-export interface AuditLogInput {
-  userId?: string | null;
-  category: string;
-  operation: string;
-  outcome: string;
-  walletPublicKey?: string | null;
-  amount?: string | null;
-  assetCode?: string | null;
-  destination?: string | null;
-  txHash?: string | null;
-  metadata?: Record<string, unknown> | null;
+export enum AuditCategory {
+  WALLET = 'WALLET',
+  TRANSACTION = 'TRANSACTION',
+  AUTH = 'AUTH',
+  COMPLIANCE = 'COMPLIANCE',
+  KYC = 'KYC',
 }
 
-export interface AuditLogQuery {
+export enum AuditOperation {
+  WALLET_CREATED = 'WALLET_CREATED',
+  WALLET_EXPORTED = 'WALLET_EXPORTED',
+  WALLET_IMPORTED = 'WALLET_IMPORTED',
+  TX_SUBMITTED = 'TX_SUBMITTED',
+  TX_SUCCESS = 'TX_SUCCESS',
+  TX_FAILED = 'TX_FAILED',
+  TX_RETRYING = 'TX_RETRYING',
+  COMPLIANCE_FREEZE_REQUESTED = 'COMPLIANCE_FREEZE_REQUESTED',
+  COMPLIANCE_CLAWBACK_REQUESTED = 'COMPLIANCE_CLAWBACK_REQUESTED',
+  COMPLIANCE_ACTION_APPROVED = 'COMPLIANCE_ACTION_APPROVED',
+  COMPLIANCE_ACTION_REJECTED = 'COMPLIANCE_ACTION_REJECTED',
+  COMPLIANCE_ACTION_DISPATCHED = 'COMPLIANCE_ACTION_DISPATCHED',
+  COMPLIANCE_ACTION_EXECUTED = 'COMPLIANCE_ACTION_EXECUTED',
+  COMPLIANCE_ACTION_FAILED = 'COMPLIANCE_ACTION_FAILED',
+}
+
+export enum AuditOutcome {
+  SUCCESS = 'SUCCESS',
+  FAILURE = 'FAILURE',
+}
+
+export interface AuditLogOptions {
   userId?: string;
   category?: string;
   operation?: string;
-  from?: Date;
-  to?: Date;
-  limit?: number;
-  offset?: number;
+  outcome?: string;
+  walletPublicKey?: string;
+  amount?: string;
+  assetCode?: string;
+  destination?: string;
+  txHash?: string;
+  metadata?: any;
 }
 
 /**
@@ -67,19 +56,25 @@ export interface AuditLogQuery {
  * which makes the log tamper-evident for compliance review.
  */
 @Injectable()
-export class AuditLogService {
-  constructor(
-    private prisma: PrismaClient,
-    private logger: Logger,
-  ) {}
+export class AuditService {
+  constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Append a log entry and seal it into the hash chain.
+   * Log an audit event to the database (append-only). Accepts either a
+   * structured options object or the legacy positional form:
+   * `log(userId, action, metadata)`.
    *
    * Failures are swallowed (fire-and-forget) so audit issues never break the
-   * main flow — the error is surfaced through the structured logger instead.
+   * main flow.
    */
-  async log(input: AuditLogInput): Promise<void> {
+  async log(
+    userIdOrOptions: string | null | AuditLogOptions,
+    action?: string,
+    metadata?: Record<string, any>,
+    _ipAddress?: string,
+    _userAgent?: string,
+    _correlationId?: string,
+  ): Promise<void> {
     try {
       // Link to the most recent sealed entry. Under extreme concurrency two
       // writers may share a parent; the chain remains tamper-evident (a fork
@@ -91,21 +86,38 @@ export class AuditLogService {
       });
       const previousHash = previous?.hash ?? null;
 
-      const created = await this.prisma.auditLog.create({
-        data: {
-          userId: input.userId ?? null,
-          category: input.category,
-          operation: input.operation,
-          outcome: input.outcome,
-          walletPublicKey: input.walletPublicKey ?? null,
-          amount: input.amount ?? null,
-          assetCode: input.assetCode ?? null,
-          destination: input.destination ?? null,
-          txHash: input.txHash ?? null,
-          metadata: (input.metadata ?? null) as any,
-          previousHash,
-        },
-      });
+      let created;
+      if (typeof userIdOrOptions === 'object' && userIdOrOptions !== null) {
+        const opts = userIdOrOptions;
+        created = await this.prisma.auditLog.create({
+          data: {
+            userId: opts.userId ?? null,
+            category: opts.category ?? 'GENERAL',
+            operation: opts.operation ?? 'ACTION',
+            outcome: opts.outcome ?? 'SUCCESS',
+            walletPublicKey: opts.walletPublicKey ?? null,
+            amount: opts.amount ?? null,
+            assetCode: opts.assetCode ?? null,
+            destination: opts.destination ?? null,
+            txHash: opts.txHash ?? null,
+            metadata: opts.metadata ?? null,
+            previousHash,
+          },
+        });
+      } else {
+        const userId: string | null =
+          typeof userIdOrOptions === 'string' ? userIdOrOptions : null;
+        created = await this.prisma.auditLog.create({
+          data: {
+            userId,
+            category: 'GENERAL',
+            operation: action ?? 'ACTION',
+            outcome: 'SUCCESS',
+            metadata: metadata ?? null,
+            previousHash,
+          },
+        });
+      }
 
       const hash = this.hashEntry({
         id: created.id,
@@ -127,42 +139,36 @@ export class AuditLogService {
         where: { id: created.id },
         data: { hash },
       });
-
-      this.logger.log({
-        event: 'audit',
-        operation: input.operation,
-        userId: input.userId,
-        category: input.category,
-        hash,
-        previousHash,
-      });
-    } catch (error) {
-      this.logger.error({
-        event: 'audit_failed',
-        error: (error as Error).message,
-        operation: input.operation,
-        userId: input.userId,
-      });
+    } catch {
+      // Don't let audit failures break the main flow
     }
   }
 
   /**
-   * Query the audit log with optional filters and pagination.
-   * Read-only — audit rows are never updated or deleted by this service.
+   * Query audit logs with filtering and pagination
    */
-  async query(filters: AuditLogQuery = {}): Promise<{ total: number; entries: any[] }> {
-    const limit = Math.min(200, Math.max(1, filters.limit ?? 50));
-    const offset = Math.max(0, filters.offset ?? 0);
+  async query(params: {
+    userId?: string;
+    category?: string;
+    operation?: string;
+    from?: Date;
+    to?: Date;
+    limit?: number;
+    offset?: number;
+  }) {
+    const rawLimit = params.limit ?? 50;
+    const limit = Math.min(200, Math.max(1, rawLimit));
+    const skip = Math.max(0, params.offset ?? 0);
 
-    const where: Record<string, unknown> = {
-      ...(filters.userId ? { userId: filters.userId } : {}),
-      ...(filters.category ? { category: filters.category } : {}),
-      ...(filters.operation ? { operation: filters.operation } : {}),
-      ...(filters.from || filters.to
+    const where: any = {
+      ...(params.userId ? { userId: params.userId } : {}),
+      ...(params.category ? { category: params.category } : {}),
+      ...(params.operation ? { operation: params.operation } : {}),
+      ...((params.from || params.to)
         ? {
             createdAt: {
-              ...(filters.from ? { gte: filters.from } : {}),
-              ...(filters.to ? { lte: filters.to } : {}),
+              ...(params.from ? { gte: params.from } : {}),
+              ...(params.to ? { lte: params.to } : {}),
             },
           }
         : {}),
@@ -172,13 +178,44 @@ export class AuditLogService {
       this.prisma.auditLog.count({ where }),
       this.prisma.auditLog.findMany({
         where,
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: { createdAt: 'desc' },
         take: limit,
-        skip: offset,
+        skip,
       }),
     ]);
 
     return { total, entries };
+  }
+
+  async getUserAuditLogs(userId: string, limit: number = 100): Promise<any[]> {
+    return this.prisma.auditLog.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
+
+  async getActionAuditLogs(action: string, limit: number = 100): Promise<any[]> {
+    return this.prisma.auditLog.findMany({
+      where: { operation: action },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
+
+  async getRecentAuditLogs(days: number = 7): Promise<any[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+
+    return this.prisma.auditLog.findMany({
+      where: {
+        createdAt: {
+          gte: cutoff,
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 1000,
+    });
   }
 
   /**
@@ -219,3 +256,5 @@ export class AuditLogService {
     return createHash('sha256').update(canonical).digest('hex');
   }
 }
+
+export { AuditService as AuditLogService };

@@ -69,7 +69,7 @@ model User {
   role         UserRole      @default(USER)
   erasedAt     DateTime?
   createdAt    DateTime      @default(now())
-  wallet       Wallet?
+  wallets      Wallet[]
   transactions Transaction[]
   kyc          KycRecord?
 }
@@ -137,10 +137,14 @@ model ComplianceApproval {
 
 model Wallet {
   id              String        @id @default(uuid())
-  /// Foreign key to the owning User. One wallet per user (enforced by @unique).
-  userId          String        @unique
+  /// Foreign key to the owning User. Multiple wallets per user are now supported.
+  userId          String
   /// Stellar public key – must be globally unique.
   publicKey       String        @unique
+  /// Optional user-defined alias for this wallet (max 32 chars).
+  alias           String?
+  /// Whether this is the active/default wallet for the user.
+  isDefault       Boolean       @default(false)
   encryptedSecret String
   encryptedDek    String?
   kmsKeyId        String?
@@ -149,6 +153,11 @@ model Wallet {
   updatedAt       DateTime      @updatedAt
   user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions    Transaction[]
+
+  /// Ensure wallet aliases are unique within a user's wallets (null aliases are not unique)
+  @@unique([userId, alias])
+  /// Index for efficient per-user wallet queries
+  @@index([userId, isDefault])
 }
 
 model Transaction {
@@ -205,6 +214,10 @@ model KycRecord {
   /// key: "<s3-key>:<sha256-hex>". Set by POST /kyc/confirm-upload after hash
   /// verification. Null until the upload is confirmed.
   documentRef     String?
+  firstName       String?
+  lastName        String?
+  idType          String?
+  photoId         String?
   submittedAt     DateTime?
   reviewedAt      DateTime?
   rejectionReason String?

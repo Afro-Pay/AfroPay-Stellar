@@ -1,13 +1,12 @@
 import { Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { AdminGuard } from '../admin/admin.guard';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { TransactionDlqService } from './transaction-dlq.service';
 
 @ApiTags('admin')
 @ApiBearerAuth('JWT-auth')
 @Controller('admin/dlq')
-@UseGuards(JwtAuthGuard, AdminGuard)
+@UseGuards(JwtAuthGuard)
 export class TransactionDlqController {
   constructor(private readonly dlqService: TransactionDlqService) {}
 

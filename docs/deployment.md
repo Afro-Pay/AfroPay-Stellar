@@ -132,7 +132,13 @@ The current Dockerfile starts Uvicorn on port `8000`. Add environment variables 
 
 Prisma uses `apps/api/prisma/schema.prisma` and reads `DATABASE_URL` from the environment. Run migrations before shifting user traffic to a new API version.
 
-Recommended production sequence:
+On Kubernetes, use the two-phase blue/green migration Jobs described in
+[docs/zero-downtime-migrations.md](zero-downtime-migrations.md) and
+[deploy/kubernetes/README.md](../deploy/kubernetes/README.md) instead of a
+single migration step — it classifies each migration as `safe` (additive) or
+`breaking`, runs safe migrations before the new pods start and defers
+breaking ones until old pods are drained, and covers the migration dry-run
+and rollback tooling. The sequence below is the underlying, orchestrator-agnostic shape that design builds on:
 
 1. Take or verify a recent PostgreSQL backup and confirm point-in-time recovery is enabled.
 2. Deploy a one-off migration job using the same API image tag that will be promoted.
@@ -154,6 +160,7 @@ Migration rules:
 - Do not run `prisma migrate dev` against staging or production; it is intended for development workflows.
 - Do not let every API replica run migrations on startup, because concurrent migration attempts can fail or lock the database during deployment.
 - For destructive migrations, rehearse the migration and rollback on staging using production-like data volume.
+- Classify every migration as `safe` or `breaking` in `apps/api/prisma/migrations/migration-manifest.json` and give every `breaking` migration a `down.sql`; see [docs/zero-downtime-migrations.md](zero-downtime-migrations.md).
 
 ## Staging Versus Production
 
@@ -193,6 +200,7 @@ Use image tags and migration discipline that make rollback predictable.
 - For backward-compatible migrations, application rollback should not require database rollback.
 - For destructive or data-transforming migrations, define the restore plan before deployment: snapshot restore, point-in-time recovery, or a written down-migration/backfill reversal.
 - Never restore production from backup without deciding how to reconcile payments or Stellar transactions that may already have settled externally.
+- To revert one applied migration (its `down.sql`) without a full restore, use `scripts/migrate-rollback.sh`; see the rollback runbook in [docs/zero-downtime-migrations.md](zero-downtime-migrations.md#4-rollback-runbook).
 
 ### External settlement rollback
 
@@ -210,7 +218,8 @@ Stellar transactions are externally visible and generally cannot be undone by re
 - [ ] Secrets are present in the secret manager and not stored in image layers or source control.
 - [ ] `ENCRYPTION_KEY` is a 64-character hex string and is backed up securely.
 - [ ] PostgreSQL backup/PITR is enabled and a restore has been tested.
-- [ ] Migrations were run once with `npx prisma migrate deploy`.
+- [ ] Every new migration has a classification in `apps/api/prisma/migrations/migration-manifest.json`, and a `down.sql` if classified `breaking`.
+- [ ] Migrations were run via the pre-deploy/post-deploy Jobs (or `npx prisma migrate deploy` once, outside Kubernetes).
 - [ ] API and frontend health checks target real routes.
 - [ ] Staging smoke tests passed with the same image tags intended for production.
 - [ ] Rollback image tags and database recovery steps are documented for the release.

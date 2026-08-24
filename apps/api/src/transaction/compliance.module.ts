@@ -7,6 +7,7 @@ import { JwtStrategy } from '../auth/jwt.strategy';
 import { AdminGuard } from '../admin/admin.guard';
 import { ComplianceController } from './compliance.controller';
 import { ComplianceActionService } from './compliance-action.service';
+import { ComplianceService } from './compliance.service';
 import { ComplianceExecutor, RedisComplianceExecutor } from './compliance-executor';
 
 @Module({
@@ -18,6 +19,7 @@ import { ComplianceExecutor, RedisComplianceExecutor } from './compliance-execut
   controllers: [ComplianceController],
   providers: [
     ComplianceActionService,
+    ComplianceService,
     { provide: ComplianceExecutor, useClass: RedisComplianceExecutor },
     AdminGuard,
     JwtAuthGuard,
