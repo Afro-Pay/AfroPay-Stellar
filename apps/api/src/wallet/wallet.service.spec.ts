@@ -219,6 +219,24 @@ describe("WalletService getBalances polling", () => {
   });
 });
 
+describe("WalletService Horizon failover", () => {
+  it("loads accounts through the RPC client when available", async () => {
+    const rpcClient = {
+      withHorizonServer: jest.fn(async (operation) =>
+        operation({
+          loadAccount: jest.fn().mockResolvedValue({ sequence: "200", balances: [] }),
+        }),
+      ),
+    };
+    const service = new WalletService(null as any, undefined, rpcClient as any);
+
+    await expect((service as any).loadAccount("GACCOUNT")).resolves.toMatchObject({
+      sequence: "200",
+    });
+    expect(rpcClient.withHorizonServer).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("WalletService multi-wallet CRUD", () => {
   let service: WalletService;
   let prisma: any;
