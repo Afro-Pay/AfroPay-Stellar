@@ -9,11 +9,25 @@ import {
   Query,
 } from '@nestjs/common';
 import { TransactionService } from './transaction.service';
+import { SimulationService } from '../soroban/simulation.service';
+import { SimulateTransactionDto } from '../soroban/dto/simulate-transaction.dto';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 
 @Controller('transaction')
 export class TransactionController {
-  constructor(private transactionService: TransactionService) {}
+  constructor(
+    private transactionService: TransactionService,
+    private simulationService: SimulationService,
+  ) {}
+
+  /**
+   * POST /transaction/simulate & POST /transactions/simulate
+   * Soroban transaction pre-flight simulation and gas estimation service
+   */
+  @Post(['simulate', '/transactions/simulate'])
+  async simulateTransaction(@Body() dto: SimulateTransactionDto) {
+    return this.simulationService.simulateTransaction(dto);
+  }
 
   /**
    * POST /transaction/initiate

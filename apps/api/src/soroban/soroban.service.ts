@@ -34,8 +34,8 @@ export class SorobanService {
   constructor() {
     const rpcUrl = process.env.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org';
     const networkPassphrase = process.env.STELLAR_NETWORK === 'public'
-      ? Networks.PUBLIC_NETWORK_PASSPHRASE
-      : Networks.TESTNET_NETWORK_PASSPHRASE;
+      ? Networks.PUBLIC
+      : Networks.TESTNET;
 
     this.sorobanRpc = new SorobanRpc.Server(rpcUrl, { allowHttp: true });
     this.contractAddress = process.env.SOROBAN_CONTRACT_ADDRESS!;
