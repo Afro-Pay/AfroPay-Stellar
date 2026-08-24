@@ -4,6 +4,7 @@ import { TransactionService } from './transaction.service';
 import { TransactionController } from './transaction.controller';
 import { TransactionDlqController } from './transaction-dlq.controller';
 import { TransactionDlqService } from './transaction-dlq.service';
+import { TRANSACTION_QUEUE_NAME, TRANSACTION_DLQ_QUEUE_NAME } from './transaction-retry.config';
 import { TransactionProcessor } from './transaction.processor';
 import { TransferSimulationService } from './transfer-simulation.service';
 import { FraudService } from './fraud.service';
@@ -34,9 +35,10 @@ import { RedisLockService } from '../common/lock/lock.service';
     TransactionDlqService,
     TransferSimulationService,
     FraudService,
+    ComplianceService,
     AdminGuard,
     RedisLockService,
   ],
-  controllers: [TransactionController, TransactionDlqController],
+  controllers: [TransactionController, TransactionDlqController, ComplianceController],
 })
 export class TransactionModule {}
