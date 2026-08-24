@@ -498,8 +498,8 @@ mod tests {
             endpoint("primary", &primary, RpcEndpointKind::Horizon),
             endpoint("backup", &backup, RpcEndpointKind::Horizon),
         ]);
-        pool.mark_success("primary", 10, Some(10)).await;
-        pool.mark_success("backup", 10, Some(10)).await;
+        pool.mark_success("primary", 5, Some(10)).await;
+        pool.mark_success("backup", 100, Some(10)).await;
 
         let payload = pool
             .horizon_post_form("/transactions", &[("tx", "xdr")])
