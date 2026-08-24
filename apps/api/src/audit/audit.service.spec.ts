@@ -1,3 +1,5 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { PrismaService } from '../prisma/prisma.service';
 import {
   AuditLogService,
   AuditCategory,
@@ -28,9 +30,16 @@ describe('AuditLogService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Constructed directly with the mock rather than through Nest's DI
-    // container — AuditLogService's real dependency is the PrismaService
-    // class, which this lightweight mock doesn't need to satisfy.
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        AuditLogService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: 'PrismaService', useValue: mockPrisma },
+      ],
+    }).compile();
+
+    // Manually construct with mock because NestJS DI token is PrismaService class.
     service = new AuditLogService(mockPrisma as any);
   });
 

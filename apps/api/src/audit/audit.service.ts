@@ -1,6 +1,39 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Logger } from 'nestjs-pino';
+
+export enum AuditCategory {
+  WALLET = 'WALLET',
+  TRANSACTION = 'TRANSACTION',
+  AUTH = 'AUTH',
+}
+
+export enum AuditOperation {
+  WALLET_CREATED = 'WALLET_CREATED',
+  WALLET_EXPORTED = 'WALLET_EXPORTED',
+  WALLET_IMPORTED = 'WALLET_IMPORTED',
+  TX_SUBMITTED = 'TX_SUBMITTED',
+  TX_SUCCESS = 'TX_SUCCESS',
+  TX_FAILED = 'TX_FAILED',
+  TX_RETRYING = 'TX_RETRYING',
+}
+
+export enum AuditOutcome {
+  SUCCESS = 'SUCCESS',
+  FAILURE = 'FAILURE',
+}
+
+export interface AuditLogOptions {
+  userId?: string;
+  category?: string;
+  operation?: string;
+  outcome?: string;
+  walletPublicKey?: string;
+  amount?: string;
+  assetCode?: string;
+  destination?: string;
+  txHash?: string;
+  metadata?: any;
+}
 
 /** High-level event category — mirrors the doc comment on the AuditLog model. */
 export enum AuditCategory {
@@ -79,85 +112,128 @@ function buildWhere(filters: Pick<AuditLogQuery, 'userId' | 'category' | 'operat
  * trigger (see prisma/migrations/*_audit_log_immutable_trigger).
  */
 @Injectable()
-export class AuditLogService {
-  constructor(
-    private readonly prisma: PrismaService,
-    @Optional() private readonly logger?: Logger,
-  ) {}
+export class AuditService {
+  constructor(private readonly prisma: PrismaService) {}
 
   /**
    * Record an audit event. Never throws — a failure to write the audit trail
    * must not break the operation being audited.
    */
-  async log(entry: AuditLogEntry): Promise<void> {
+  async log(
+    userIdOrOptions: string | null | AuditLogOptions,
+    action?: string,
+    metadata?: Record<string, any>,
+    _ipAddress?: string,
+    _userAgent?: string,
+    _correlationId?: string,
+  ): Promise<void> {
     try {
-      await this.prisma.auditLog.create({
-        data: {
-          userId: entry.userId ?? null,
-          category: entry.category,
-          operation: entry.operation,
-          outcome: entry.outcome,
-          walletPublicKey: entry.walletPublicKey,
-          amount: entry.amount,
-          assetCode: entry.assetCode,
-          destination: entry.destination,
-          txHash: entry.txHash,
-          metadata: entry.metadata,
-        },
-      });
-    } catch (error) {
-      this.logger?.error?.({
-        event: 'audit_write_failed',
-        error: (error as Error).message,
-        category: entry.category,
-        operation: entry.operation,
-      });
+      if (typeof userIdOrOptions === 'object' && userIdOrOptions !== null) {
+        const opts = userIdOrOptions;
+        await this.prisma.auditLog.create({
+          data: {
+            userId: opts.userId ?? null,
+            category: opts.category ?? 'GENERAL',
+            operation: opts.operation ?? 'ACTION',
+            outcome: opts.outcome ?? 'SUCCESS',
+            walletPublicKey: opts.walletPublicKey ?? null,
+            amount: opts.amount ?? null,
+            assetCode: opts.assetCode ?? null,
+            destination: opts.destination ?? null,
+            txHash: opts.txHash ?? null,
+            metadata: opts.metadata ?? null,
+          },
+        });
+      } else {
+        const userId: string | null = typeof userIdOrOptions === 'string' ? userIdOrOptions : null;
+        await this.prisma.auditLog.create({
+          data: {
+            userId,
+            category: 'GENERAL',
+            operation: action ?? 'ACTION',
+            outcome: 'SUCCESS',
+            metadata: metadata ?? null,
+          },
+        });
+      }
+    } catch {
+      // Don't let audit failures break the main flow
     }
-  }
-
-  /** Paginated, filtered read access for the /audit/logs endpoint. */
-  async query(filters: AuditLogQuery): Promise<{ entries: any[]; total: number }> {
-    const take = Math.min(filters.limit ?? DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
-    const skip = filters.offset ?? 0;
-    const where = buildWhere(filters);
-
-    const [entries, total] = await Promise.all([
-      this.prisma.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, take, skip }),
-      this.prisma.auditLog.count({ where }),
-    ]);
-
-    return { entries, total };
   }
 
   /**
-   * Streams every row matching the given filters as NDJSON lines (one JSON
-   * object per line, oldest first), for the compliance export endpoint.
-   * Pages through the table with a keyset cursor instead of loading the full
-   * result set into memory.
+   * Query audit logs with filtering and pagination
    */
-  async *exportNdjson(
-    filters: Pick<AuditLogQuery, 'userId' | 'category' | 'operation' | 'from' | 'to'>,
-    pageSize: number = EXPORT_PAGE_SIZE,
-  ): AsyncGenerator<string> {
-    const where = buildWhere(filters);
-    let cursor: string | undefined;
+  async query(params: {
+    userId?: string;
+    category?: string;
+    operation?: string;
+    from?: Date;
+    to?: Date;
+    limit?: number;
+    offset?: number;
+  }) {
+    const rawLimit = params.limit ?? 50;
+    const limit = Math.min(200, Math.max(1, rawLimit));
+    const skip = Math.max(0, params.offset ?? 0);
 
-    for (;;) {
-      const rows = await this.prisma.auditLog.findMany({
+    const where: any = {
+      ...(params.userId ? { userId: params.userId } : {}),
+      ...(params.category ? { category: params.category } : {}),
+      ...(params.operation ? { operation: params.operation } : {}),
+      ...((params.from || params.to)
+        ? {
+            createdAt: {
+              ...(params.from ? { gte: params.from } : {}),
+              ...(params.to ? { lte: params.to } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const [total, entries] = await Promise.all([
+      this.prisma.auditLog.count({ where }),
+      this.prisma.auditLog.findMany({
         where,
-        orderBy: { id: 'asc' },
-        take: pageSize,
-        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-      });
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip,
+      }),
+    ]);
 
-      if (rows.length === 0) break;
+    return { total, entries };
+  }
 
-      for (const row of rows) {
-        yield JSON.stringify(row) + '\n';
-      }
+  async getUserAuditLogs(userId: string, limit: number = 100): Promise<any[]> {
+    return this.prisma.auditLog.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
 
-      cursor = rows[rows.length - 1].id;
-      if (rows.length < pageSize) break;
-    }
+  async getActionAuditLogs(action: string, limit: number = 100): Promise<any[]> {
+    return this.prisma.auditLog.findMany({
+      where: { operation: action },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
+
+  async getRecentAuditLogs(days: number = 7): Promise<any[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    
+    return this.prisma.auditLog.findMany({
+      where: {
+        createdAt: {
+          gte: cutoff,
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 1000,
+    });
   }
 }
+
+export { AuditService as AuditLogService };

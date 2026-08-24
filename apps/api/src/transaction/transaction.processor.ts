@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { Process, Processor } from '@nestjs/bull';
 import { Job } from 'bull';
 import { PrismaService } from '../prisma/prisma.service';
@@ -6,6 +6,7 @@ import { AuditLogService, AuditCategory, AuditOperation, AuditOutcome } from '..
 import { Logger } from 'nestjs-pino';
 import { FraudService } from './fraud.service';
 import { assertTransactionAmountIntegrity } from './transaction-integrity';
+import { RedisLockService } from '../common/lock/lock.service';
 
 /** riskScore >= this threshold → reject outright (FAILED). */
 const FRAUD_BLOCK_THRESHOLD = 0.8;
@@ -36,6 +37,7 @@ export class TransactionProcessor {
     private auditService: AuditLogService,
     private logger: Logger,
     private fraudService: FraudService,
+    @Optional() private lockService?: RedisLockService,
   ) {}
 
   /**
@@ -78,7 +80,11 @@ export class TransactionProcessor {
       return transaction;
     }
 
-    return this.processTransaction(userId, transaction, amount, assetCode, destinationPublicKey, memo);
+    const lockService = this.lockService ?? new RedisLockService();
+    return lockService.withLock(
+      `lock:escrow:${transaction.id}`,
+      () => this.processTransaction(userId, transaction, amount, assetCode, destinationPublicKey, memo),
+    );
   }
 
   /**
@@ -137,6 +143,8 @@ export class TransactionProcessor {
         data: {
           status: 'SUCCESS',
           stellarTxHash: result.hash,
+          ...(fraudResult.riskScore !== undefined ? { riskScore: fraudResult.riskScore } : {}),
+          ...(fraudResult.flagged !== undefined ? { flagged: fraudResult.flagged } : {}),
         },
       });
 
@@ -206,7 +214,7 @@ export class TransactionProcessor {
     amount: string,
     assetCode: string,
     destination: string,
-  ): Promise<{ blocked: boolean; updatedTx?: any }> {
+  ): Promise<{ blocked: boolean; updatedTx?: any; riskScore?: number; flagged?: boolean }> {
     let riskScore: number;
     let flagged: boolean;
     let reasons: string[];
@@ -324,7 +332,7 @@ export class TransactionProcessor {
       riskScore,
     });
 
-    return { blocked: false };
+    return { blocked: false, riskScore, flagged };
   }
 
   private async processOnChain(transaction: any): Promise<{ hash: string }> {

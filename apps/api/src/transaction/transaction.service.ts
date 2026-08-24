@@ -69,12 +69,10 @@ export interface PaginatedTransactions {
   limit: number;
 }
 
-export interface SendTransferDto {
-  destinationPublicKey: string;
-  amount: string;
-  assetCode: string;
-  assetIssuer?: string;
-  memo?: string;
+export interface InitiateTransferDto {
+  recipientCountry: string;
+  fiatAmount: number;
+  fiatCurrency: string;
 }
 
 export interface SendTransferResponse {
@@ -323,8 +321,44 @@ export class TransactionService {
     return this.prisma.transaction.findMany({
       where: { walletId },
       orderBy: { createdAt: 'desc' },
-      take: 50,
     });
+
+    const total = await this.prisma.transaction.count({ where: { userId } });
+
+    return {
+      transactions,
+      total,
+      skip,
+      take,
+    };
+  }
+
+  /**
+   * Oracle submits delivery attestation
+   */
+  async submitOracleAttestation(oracleAddress: string, attestation: any): Promise<any> {
+    // Verify oracle is registered
+    // In production, check oracle_operators map on contract
+
+    // Release funds to agent
+    await this.soroban.releaseToAgent(attestation.escrowId, attestation);
+
+    // Update transaction status
+    const transaction = await this.prisma.transaction.findFirst({
+      where: { memo: attestation.escrowId },
+    });
+
+    if (transaction) {
+      await this.prisma.transaction.update({
+        where: { id: transaction.id },
+        data: {
+          status: attestation.deliverySuccess ? 'COMPLETED' : 'FAILED',
+          stellarTxHash: attestation.signature,
+        },
+      });
+    }
+
+    return { escrowId: attestation.escrowId, status: 'RELEASED' };
   }
 
   async getTransaction(txId: string, userId?: string) {
