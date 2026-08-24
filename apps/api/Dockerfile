@@ -23,6 +23,12 @@ ENV NODE_ENV=production
 COPY --from=builder /app/dist ./dist
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/prisma ./prisma
+# scripts/migrate-*.sh and migrate-classify.js are run as the command for the
+# pre-deploy and post-deploy migration Jobs (see deploy/kubernetes). "prisma"
+# is a production dependency (not devDependencies) specifically so the CLI
+# version used by `npx prisma` here is the one pinned in package.json instead
+# of npx silently fetching the latest CLI from the registry at deploy time.
+COPY --from=builder /app/scripts ./scripts
 
 EXPOSE 3001
 CMD ["node", "dist/main"]

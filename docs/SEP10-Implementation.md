@@ -53,9 +53,26 @@ This document describes the implementation of SEP-10 wallet authentication for a
 4. Account doesn't match user wallet - should return 403
 5. No account param - should return 400
 
+## Audit Findings
+
+### 1) JWT expiration (`exp`) checks
+- Status: Correctly enforced in the token validation path.
+- Evidence: `passport-jwt` rejects expired access tokens before the request reaches the controller, and the anchor service adds an explicit `exp` check when verifying SEP-10 JWT claims.
+- Result: expired tokens return 401 and do not access protected anchor endpoints.
+
+### 2) Challenge nonce single-use enforcement
+- Status: Fixed and enforced.
+- Implementation: challenge nonces are issued and stored in Redis with the same TTL as the challenge expiry, then transitioned to `used` on first successful validation. Reuse of a previously consumed nonce is rejected with 401.
+- Result: replayed challenge reuse is blocked even if the same signed payload is replayed.
+
+### 3) Anchor signing-key validation against `stellar.toml`
+- Status: Fixed and enforced.
+- Implementation: the server fetches the anchor `SIGNING_KEY` from `/.well-known/stellar.toml` on first use, caches it, and compares it to the configured runtime value before trusting the challenge flow.
+- Result: mismatched signing keys are rejected with 401.
+
 ## Future Improvements
 
-1. Full SEP-10 signature verification
-2. Configurable challenge expiry
+1. Full SEP-10 signature verification against the wallet's challenge payload
+2. Configurable challenge expiry and stricter nonce rotation policies
 3. Rate limiting for challenge requests
 4. Audit logging for authentication attempts

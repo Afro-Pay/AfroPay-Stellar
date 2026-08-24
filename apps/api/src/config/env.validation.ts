@@ -52,6 +52,18 @@ export const envValidationSchema = Joi.object({
         '"COSIGNER_SECRET" must be a valid Stellar secret seed starting with S',
     }),
 
+  COSIGNER_PUBLIC_KEY: Joi.string()
+    .pattern(/^G[2-9A-Za-z]{55}$/)
+    .optional(),
+
+  SIGNER_URL: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .optional(),
+
+  SIGNER_AUTH_TOKEN: Joi.string()
+    .min(16)
+    .optional(),
+
   KMS_KEY_ID: Joi.string()
     .optional()
     .messages({
@@ -97,4 +109,8 @@ export const envValidationSchema = Joi.object({
       'string.uri': '"ANCHOR_NGN_URL" must be a valid URL',
       'any.required': '"ANCHOR_NGN_URL" is required',
     }),
-}).or('KMS_KEY_ID', 'ENCRYPTION_KEY').with('KMS_KEY_ID', 'AWS_REGION');
+})
+  .or('KMS_KEY_ID', 'ENCRYPTION_KEY')
+  .with('KMS_KEY_ID', 'AWS_REGION')
+  .with('SIGNER_URL', 'SIGNER_AUTH_TOKEN')
+  .with('SIGNER_AUTH_TOKEN', 'SIGNER_URL');

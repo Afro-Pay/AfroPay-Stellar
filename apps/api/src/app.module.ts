@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
+import { BullModule } from '@nestjs/bull';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { WalletModule } from './wallet/wallet.module';
 import { TransactionModule } from './transaction/transaction.module';
+import { MetricsModule } from './metrics/metrics.module';
 import { LoggerModule } from 'nestjs-pino';
 import { AdminModule } from './admin/admin.module';
 
@@ -19,11 +21,14 @@ import { AdminModule } from './admin/admin.module';
         }),
       },
     }),
+    MetricsModule,
     AuditModule,
     AuthModule,
     WalletModule,
     TransactionModule,
     AdminModule,
   ],
+  controllers: [],
+  providers: [],
 })
 export class AppModule {}

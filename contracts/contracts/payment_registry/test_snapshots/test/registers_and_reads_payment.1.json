@@ -114,6 +114,58 @@
             "contract_data": {
               "ext": "v0",
               "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "Payment"
+                  },
+                  {
+                    "string": "tx-abc-123"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "amount"
+                    },
+                    "val": {
+                      "i128": "1000000"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "recipient"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "registered"
+                    },
+                    "val": {
+                      "bool": true
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
               "key": "ledger_key_contract_instance",
               "durability": "persistent",
               "val": {
@@ -132,52 +184,6 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                      }
-                    },
-                    {
-                      "key": {
-                        "vec": [
-                          {
-                            "symbol": "Payments"
-                          }
-                        ]
-                      },
-                      "val": {
-                        "map": [
-                          {
-                            "key": {
-                              "string": "tx-abc-123"
-                            },
-                            "val": {
-                              "map": [
-                                {
-                                  "key": {
-                                    "symbol": "amount"
-                                  },
-                                  "val": {
-                                    "i128": "1000000"
-                                  }
-                                },
-                                {
-                                  "key": {
-                                    "symbol": "recipient"
-                                  },
-                                  "val": {
-                                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                                  }
-                                },
-                                {
-                                  "key": {
-                                    "symbol": "registered"
-                                  },
-                                  "val": {
-                                    "bool": true
-                                  }
-                                }
-                              ]
-                            }
-                          }
-                        ]
                       }
                     }
                   ]

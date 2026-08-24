@@ -172,6 +172,7 @@ describe('Remittance E2E', () => {
       const res = await request(app.getHttpServer())
         .post('/transactions/send')
         .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', 'a1111111-2222-4333-8444-555555555555')
         .send({
           destinationPublicKey: DEST_KEY,
           amount: '50',
@@ -292,6 +293,14 @@ describe('Remittance E2E', () => {
       expect(res.body.txId).not.toBe(originalTxId);
     });
 
+    it('rejects a missing Idempotency-Key (400)', async () => {
+      await request(app.getHttpServer())
+        .post('/transactions/send')
+        .set('Authorization', `Bearer ${idemToken}`)
+        .send(body)
+        .expect(400);
+    });
+
     it('rejects a malformed Idempotency-Key (400)', async () => {
       await request(app.getHttpServer())
         .post('/transactions/send')
@@ -318,24 +327,25 @@ describe('Remittance E2E', () => {
       });
 
       const res = await request(app.getHttpServer())
-        .get('/anchor/withdraw')
+        .get('/anchor/withdraw?assetCode=USDC')
         .set('Authorization', `Bearer ${token}`)
-        .query({ asset: 'USDC', account: DEST_KEY, amount: '50' })
         .expect(200);
 
+      expect(res.body.type).toBe('non_interactive_customer_info_needed');
       expect(res.body.fee_fixed).toBe(0.5);
     });
   });
 
   // -------------------------------------------------------------------------
-  // 5. Failure cases
+  // 5. Error handling & resilience
   // -------------------------------------------------------------------------
-  describe('failure cases', () => {
-    it('insufficient balance: Horizon rejects the transaction', async () => {
-      // Horizon throws an "insufficient balance" error for a fresh wallet
-      mockSubmitTransaction.mockRejectedValueOnce(
-        Object.assign(new Error('Request failed with status code 400'), {
-          response: {
+  describe('error handling & edge cases', () => {
+    it('underfunded transaction: enqueued, will fail during settlement', async () => {
+      // Worker receives Horizon error (tx_failed/op_underfunded)
+      mockedAxios.post = jest.fn().mockRejectedValue(
+        new AxiosError('Request failed with status code 400', 'ERR_BAD_REQUEST', undefined, undefined, {
+          status: 400,
+          data: {
             status: 400,
             data: { extras: { result_codes: { transaction: 'tx_failed', operations: ['op_underfunded'] } } },
           },
@@ -346,6 +356,7 @@ describe('Remittance E2E', () => {
       const res = await request(app.getHttpServer())
         .post('/transactions/send')
         .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', 'b2222222-3333-4444-8555-666666666666')
         .send({ destinationPublicKey: DEST_KEY, amount: '1', assetCode: 'XLM' })
         .expect(201);
 
@@ -371,6 +382,7 @@ describe('Remittance E2E', () => {
       await request(app.getHttpServer())
         .post('/transactions/send')
         .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', 'c3333333-4444-4555-8666-777777777777')
         .send({
           destinationPublicKey: 'NOT_A_VALID_STELLAR_KEY',
           amount: '1',
@@ -384,6 +396,7 @@ describe('Remittance E2E', () => {
       const res = await request(app.getHttpServer())
         .post('/transactions/send')
         .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', 'd4444444-5555-4666-8777-888888888888')
         .send({
           destinationPublicKey: DEST_KEY,
           amount: '60',
@@ -397,6 +410,7 @@ describe('Remittance E2E', () => {
     it('returns 401 when sending without a token', async () => {
       await request(app.getHttpServer())
         .post('/transactions/send')
+        .set('Idempotency-Key', 'e5555555-6666-4777-8888-999999999999')
         .send({ destinationPublicKey: DEST_KEY, amount: '1', assetCode: 'XLM' })
         .expect(401);
     });
@@ -415,6 +429,7 @@ describe('Remittance E2E', () => {
       const txRes = await request(app.getHttpServer())
         .post('/transactions/send')
         .set('Authorization', `Bearer ${otherToken}`)
+        .set('Idempotency-Key', 'f6666666-7777-4888-8999-000000000000')
         .send({ destinationPublicKey: DEST_KEY, amount: '1', assetCode: 'XLM' });
 
       const otherTxId = txRes.body.txId;

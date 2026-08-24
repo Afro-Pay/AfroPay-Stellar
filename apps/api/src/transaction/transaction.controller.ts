@@ -19,6 +19,8 @@ import { KycGuard } from '../kyc/kyc.guard';
 import { RateLimit } from '../rate-limit/rate-limit.decorator';
 import {
   GetHistoryQueryDto,
+  GetTransactionsQueryDto,
+  PaginatedTransactionsDto,
   PaginatedHistoryDto,
   SendDto,
   TransactionResponseDto,
@@ -31,7 +33,7 @@ import {
 export class TransactionController {
   constructor(private readonly transactionService: TransactionService) {}
 
-  @Post('send')
+  @Post(['', 'send'])
   @UseGuards(KycGuard)
   @RateLimit({
     keyPrefix: 'transactions:send',
@@ -43,10 +45,10 @@ export class TransactionController {
   @ApiOperation({ summary: 'Send payment' })
   @ApiHeader({
     name: 'Idempotency-Key',
-    required: false,
+    required: true,
     description:
-      'Optional UUID. Retrying a send with the same key within 24h returns the ' +
-      'original response (HTTP 200) without creating a second transfer.',
+      'Required UUID identifying the request. Missing or malformed keys return 400 Bad Request. ' +
+      'Retrying a send with the same key within 24h returns the original response (HTTP 200) without creating a second transfer.',
   })
   @ApiResponse({
     status: 201,
@@ -58,7 +60,7 @@ export class TransactionController {
     description: 'Duplicate request with a known Idempotency-Key — original response replayed',
     type: TransactionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Invalid transaction data or malformed Idempotency-Key' })
+  @ApiResponse({ status: 400, description: 'Missing or malformed Idempotency-Key or invalid transaction data' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 402, description: 'Insufficient funds' })
   async sendPayment(
@@ -82,6 +84,14 @@ export class TransactionController {
     return { txId: result.txId, status: result.status };
   }
 
+  @Get()
+  @ApiOperation({ summary: 'Get filtered, paginated transaction history' })
+  @ApiResponse({ status: 200, type: PaginatedTransactionsDto })
+  @ApiResponse({ status: 400, description: 'Invalid pagination or filter parameters' })
+  transactions(@Request() req: any, @Query() query: GetTransactionsQueryDto) {
+    return this.transactionService.getTransactions(req.user.userId, query);
+  }
+
   @Get('history')
   @ApiOperation({ summary: 'Get paginated transaction history' })
   @ApiResponse({
@@ -98,6 +108,10 @@ export class TransactionController {
     });
   }
 
+  /**
+   * GET /transaction/:id
+   * Get transaction status
+   */
   @Get(':id')
   @ApiOperation({ summary: 'Get transaction by ID' })
   @ApiResponse({
@@ -127,12 +141,12 @@ export class TransactionController {
     /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
   /**
-   * Validates the optional Idempotency-Key header. Returns undefined when absent
-   * (idempotency disabled for the request) and throws on a malformed value so a
-   * client bug can't silently bypass deduplication.
+   * Validates the Idempotency-Key header. Throws BadRequestException on missing or malformed keys.
    */
-  private normalizeIdempotencyKey(raw?: string): string | undefined {
-    if (raw === undefined) return undefined;
+  private normalizeIdempotencyKey(raw?: string): string {
+    if (raw === undefined || raw.trim() === '') {
+      throw new BadRequestException('Idempotency-Key header is required');
+    }
     const key = raw.trim();
     if (!TransactionController.IDEMPOTENCY_KEY_PATTERN.test(key)) {
       throw new BadRequestException('Idempotency-Key header must be a valid UUID');
