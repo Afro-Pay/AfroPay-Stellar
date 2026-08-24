@@ -5,12 +5,12 @@ use std::time::Instant;
 use tokio::sync::Semaphore;
 use tracing::{error, info};
 use crate::metrics::{QUEUE_DEPTH, TX_LATENCY_MS, TX_SUCCESS_TOTAL, TX_FAILURE_TOTAL};
-use crate::models::TransactionJob;
-use crate::stellar::{self, TESTNET_PASSPHRASE, PUBLIC_PASSPHRASE};
+use crate::lock_manager::LockManager;
 
 pub async fn listen() -> Result<()> {
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into());
     let client = redis::Client::open(redis_url)?;
+    let lock_manager = LockManager::new(client.clone());
 
     let horizon_url = Arc::new(
         std::env::var("HORIZON_URL")
@@ -54,35 +54,46 @@ pub async fn listen() -> Result<()> {
             match serde_json::from_str::<TransactionJob>(&payload) {
                 Ok(job) => {
                     let permit = semaphore.clone().acquire_owned().await.unwrap();
-                    let http_client = http_client.clone();
-                    let horizon_url = horizon_url.clone();
-                    let source_secret = source_secret.clone();
                     info!("Dispatching job: {}", job.id);
 
+                    let lock_manager = lock_manager.clone();
                     tokio::spawn(async move {
                         let start = Instant::now();
-                        let job_id = job.id.clone();
-                        match stellar::submit_transaction(
-                            &http_client,
-                            &horizon_url,
-                            &job,
-                            &source_secret,
-                            network_passphrase,
-                        )
-                        .await
-                        {
-                            Ok(hash) => {
-                                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                                TX_LATENCY_MS.observe(elapsed_ms);
-                                TX_SUCCESS_TOTAL.inc();
-                                info!("Job {} succeeded: {}", job_id, hash);
+                        let lock = match lock_manager.acquire(format!("lock:escrow:{}", job.id)).await {
+                            Ok(lock) => lock,
+                            Err(e) => {
+                                error!("Job {} - lock collision: {}", job.id, e);
+                                drop(permit);
+                                return;
+                            }
+                        };
+                        // Each task creates its own connection for safety
+                        match client_clone.get_async_connection().await {
+                            Ok(mut _task_conn) => {
+                                match submit_transaction(&job).await {
+                                    Ok(hash) => {
+                                        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                                        TX_LATENCY_MS.observe(elapsed_ms);
+                                        TX_SUCCESS_TOTAL.inc();
+                                        info!("Job {} succeeded: {}", job.id, hash);
+                                    }
+                                    Err(e) => {
+                                        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                                        TX_LATENCY_MS.observe(elapsed_ms);
+                                        TX_FAILURE_TOTAL.inc();
+                                        error!("Job {} failed: {}", job.id, e);
+                                    }
+                                }
                             }
                             Err(e) => {
                                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
                                 TX_LATENCY_MS.observe(elapsed_ms);
                                 TX_FAILURE_TOTAL.inc();
-                                error!("Job {} failed: {}", job_id, e);
+                                error!("Job {} - failed to get task connection: {}", job.id, e);
                             }
+                        }
+                        if let Err(e) = lock.release().await {
+                            error!("Job {} - lock release failed: {}", job.id, e);
                         }
                         drop(permit);
                     });
