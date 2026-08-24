@@ -88,7 +88,8 @@ The frontend (Next.js) has **no direct blockchain interaction**. All Stellar ope
 | Method | Endpoint | Purpose |
 |---|---|---|
 | POST | `/auth/register` | Create account (email + password) |
-| POST | `/auth/login` | Authenticate, receive JWT |
+| POST | `/auth/login` | Authenticate, receive access and refresh tokens |
+| POST | `/auth/refresh` | Exchange a refresh token for a new access token |
 | POST | `/wallet/create` | Generate Stellar keypair |
 | GET | `/wallet/balances` | Fetch balances from Horizon |
 | POST | `/wallet/import` | Import existing secret key |
@@ -100,7 +101,7 @@ The frontend (Next.js) has **no direct blockchain interaction**. All Stellar ope
 | GET | `/anchor/withdraw` | SEP-6 withdraw info (proxied) |
 | GET | `/anchor/fx-rate` | FX rates (stub) |
 
-**Communication:** HTTP REST via Axios. JWT stored in `localStorage`, attached as `Authorization: Bearer <token>` header automatically by the Axios interceptor (`apps/frontend/lib/api.ts`).
+**Communication:** HTTP REST via Axios. The frontend stores the access token and refresh token in `localStorage`, attaches the access token as `Authorization: Bearer <token>`, and automatically retries once through `/auth/refresh` when the API returns `AUTH_TOKEN_EXPIRED` (`apps/frontend/lib/api.ts`).
 
 **State management:** Zustand store (`apps/frontend/store/walletStore.ts`) manages balances, transactions, and send operations.
 
@@ -109,8 +110,9 @@ The frontend (Next.js) has **no direct blockchain interaction**. All Stellar ope
 ### 2. API Gateway Internal Services
 
 #### Auth Service (`apps/api/src/auth/`)
-- **Registration:** Validates email/password, hashes password with bcrypt (10 rounds), stores user in PostgreSQL, returns signed JWT (7-day expiry).
-- **Login:** Validates credentials, returns JWT.
+- **Registration:** Validates email/password, hashes password with bcrypt (10 rounds), stores user in PostgreSQL, returns an access token plus refresh token.
+- **Login:** Validates credentials, returns an access token plus refresh token.
+- **Refresh:** Validates a refresh token via `POST /auth/refresh`, then issues a new access/refresh token pair.
 - **No Stellar interaction** — auth is purely application-level.
 
 #### Wallet Service (`apps/api/src/wallet/wallet.service.ts`)
@@ -142,7 +144,7 @@ This is a BullMQ consumer that processes jobs from the `transactions` queue:
    - Adds an optional memo if provided
    - Signs the transaction with the source keypair
 4. **Submit to Horizon:** Calls `server.submitTransaction(transaction)` which posts the signed XDR to Horizon
-5. **Update DB:** On success, updates the transaction record to `SUCCESS` and stores the `stellarTxHash`. On failure, retries up to 3 times with exponential backoff (2s → 4s → 8s), then marks as `FAILED` or `RETRYING`.
+5. **Update DB:** On success, updates the transaction record to `SUCCESS` and stores the `stellarTxHash`. On failure, records `retryAttempts` and `lastFailureReason`, retries up to 3 times with exponential backoff (2s → 4s → 8s), then marks as `FAILED` with `failedAt` or `RETRYING`.
 
 **Horizon calls made by Transaction Processor:**
 - `server.loadAccount(publicKey)` — get source account sequence
@@ -152,7 +154,12 @@ This is a BullMQ consumer that processes jobs from the `transactions` queue:
 - Acts as a proxy to external Stellar anchor servers (SEP-6)
 - **Deposit:** `GET {anchor_url}/sep6/deposit?asset_code=X&account=Y`
 - **Withdraw:** `GET {anchor_url}/sep6/withdraw?asset_code=X&account=Y&amount=Z`
-- **FX Rates:** Returns stub rates (USD-NGN: 1550, NGN-USD: 0.00065, XLM-USD: 0.11) — placeholder for a real FX provider
+- **FX Rates:** Returns stub rates (USD-NGN: 1550, NGN-USD: 0.00065, XLM-USD: 0.11) — placeholder for a real FX provider. Rates are cached in Redis with staleness flagging and a per-pair circuit breaker; see [FX Rate Caching, Staleness & Circuit Breaker](#fx-rate-caching-staleness--circuit-breaker).
+- The controller now validates query payloads before the service runs:
+  - deposit/withdraw `asset` is limited to `USDC` and `NGN`
+  - `account` must match a Stellar public key pattern
+  - withdraw `amount` must be a positive decimal string
+  - FX rate `from`/`to` are limited to `USD`, `NGN`, and `XLM`
 
 **External calls made by Anchor Service:**
 - HTTP GET to configured anchor URLs (via axios)
@@ -344,8 +351,9 @@ API                        Redis "stellar_jobs"         Rust Worker             
 
 - **Max attempts:** 3
 - **Backoff:** Exponential (2s, 4s, 8s)
-- **Status mapping:** `attemptsMade < 2` → `RETRYING`, `attemptsMade >= 2` → `FAILED`
-- **On success:** Status set to `SUCCESS`, `stellarTxHash` stored
+- **Status mapping:** attempts before the max are stored as `RETRYING`; the final exhausted attempt is stored as `FAILED`
+- **Failure tracking:** every failed attempt updates `retryAttempts` and `lastFailureReason`; the exhausted final attempt also sets `failedAt`
+- **On success:** Status set to `SUCCESS`, `stellarTxHash` stored, previous failure context cleared
 
 ---
 
@@ -362,6 +370,37 @@ API                        Redis "stellar_jobs"         Rust Worker             
 - `ANCHOR_NGN_URL` — defaults to `https://testanchor.stellar.org`
 
 **Flow:** The API acts as a proxy. The frontend calls the API, which forwards the request to the external anchor server and returns the response. No Stellar SDK calls are made — the anchor handles the on-chain operations.
+
+### FX Rate Caching, Staleness & Circuit Breaker
+
+`AnchorService.getFxRate(from, to)` caches rates in Redis under `fx:<from>:<to>` and separates two concerns that were previously collapsed into a single TTL:
+
+- **Freshness** (`FX_MAX_CACHE_AGE_SECONDS`, default `30`) — how old a rate may be and still count as live. `rate_expires_at` in the response is always `fetchedAt + FX_MAX_CACHE_AGE_SECONDS`.
+- **Retention** (`FX_CACHE_RETENTION_SECONDS`, default `300`) — the physical Redis TTL. It is deliberately longer than the freshness bound so that a rate survives to be served (flagged as stale) while the anchor is unreachable. After this window expires, `rate` is `null`.
+
+Every response carries two flags:
+
+| Field | Meaning |
+|---|---|
+| `stale` | `true` when the served rate is older than `FX_MAX_CACHE_AGE_SECONDS`. Fresh fetches always return `stale: false`. |
+| `circuitOpen` | `true` when the rate was served from cache while the circuit breaker is open (no anchor request was made). |
+
+**Cache behaviour on a successful fetch:** if the newly fetched rate moves more than 0.5% (`DELTA_THRESHOLD`) from the cached one, the cache is busted and the new rate served immediately. Within the threshold, the cached rate is kept for quote stability but `fetchedAt` is refreshed — `stale` therefore means "the anchor has not confirmed this rate recently", not "the rate has not changed".
+
+**Circuit breaker:** state is kept **per currency pair**, so an outage on one corridor (e.g. NGN→USD) does not stop quoting on healthy ones.
+
+1. Only a *thrown* fetch (anchor unreachable) counts as a failure. A pair the provider does not quote (`rate: null`) is a successful response and never trips the breaker.
+2. After `FX_CIRCUIT_FAILURE_THRESHOLD` (default `3`) consecutive failures the circuit opens: subsequent calls serve cached data with `circuitOpen: true` and make **no** anchor requests.
+3. After `FX_CIRCUIT_RESET_MS` (default `60000`) the circuit half-opens: the next call performs one real probe fetch. On success the circuit closes and failure counts reset; on failure it re-opens for another reset window.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `FX_MAX_CACHE_AGE_SECONDS` | `30` | Freshness bound; older rates are served with `stale: true` |
+| `FX_CACHE_RETENTION_SECONDS` | `300` | Physical Redis TTL — the serve-stale window during outages |
+| `FX_CIRCUIT_FAILURE_THRESHOLD` | `3` | Consecutive failures before the circuit opens |
+| `FX_CIRCUIT_RESET_MS` | `60000` | How long the circuit stays open before a half-open probe |
+
+**Known limitation:** breaker state lives in process memory. With N API replicas, each replica trips its own breaker independently, so a dead anchor may receive up to N probe requests per reset window. Moving breaker state to Redis (as done for rate limiting) is a possible follow-up.
 
 ---
 
@@ -408,7 +447,7 @@ TransactionProcessor (async):
   → Builds TransactionBuilder + Operation.payment()
   → Signs with source keypair
   → Submits to Horizon via server.submitTransaction()
-  → Updates DB to SUCCESS/FAILED with stellarTxHash
+  → Updates DB to SUCCESS with stellarTxHash, or RETRYING/FAILED with retryAttempts and failure context
 ```
 
 ### Deposit/Withdraw Info Flow
@@ -424,10 +463,10 @@ Frontend → GET /anchor/deposit or /anchor/withdraw → AnchorService
 
 | Concern | Implementation |
 |---|---|
-| **Auth** | JWT (7-day expiry) + bcrypt password hashing (10 rounds) |
+| **Auth** | Short-lived access JWT + refresh JWT pair, configurable expiries, plus bcrypt password hashing (10 rounds) |
 | **Key storage** | AES-256-CBC encryption (32-byte key from `ENCRYPTION_KEY` env var) |
 | **Key exposure** | Secret keys never sent to frontend by default; `/wallet/export` decrypts server-side |
-| **API protection** | `@UseGuards(AuthGuard('jwt'))` on all wallet/transaction/anchor endpoints |
+| **API protection** | `@UseGuards(JwtAuthGuard)` on all wallet/transaction/anchor endpoints, with explicit `AUTH_TOKEN_EXPIRED` and `AUTH_TOKEN_INVALID` responses |
 | **Transaction signing** | Done server-side in TransactionProcessor (secret loaded from DB, decrypted, used to sign, never logged) |
 
 ---

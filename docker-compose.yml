@@ -1,10 +1,32 @@
-version: '3.8'
+version: "3.9"
+
+# =============================================================================
+# AfroPay-Stellar — Docker Compose (Local Development)
+# =============================================================================
+# ⚠ SECURITY NOTES ⚠
+# 1. The secrets below are DEVELOPMENT defaults. Never use in production.
+# 2. For production, use a secrets manager (Vault, AWS Secrets Manager, etc.)
+#    or a .env file with restricted permissions (chmod 600).
+# 3. PostgreSQL and Redis ports are exposed to the host for convenience.
+#    In production, remove `ports` or bind to 127.0.0.1 only.
+# 4. Generate real secrets before any public deployment:
+#    - JWT_SECRET: openssl rand -base64 48
+#    - ENCRYPTION_KEY: openssl rand -hex 32
+# =============================================================================
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+    compress: "true"
 
 services:
   # PostgreSQL Database
   postgres:
-    image: postgres:15-alpine
-    container_name: afropay-postgres
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: afropay
       POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_password}
@@ -12,121 +34,121 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./apps/api/prisma/migrations:/docker-entrypoint-initdb.d
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U afropay"]
+      test: ["CMD-SHELL", "pg_isready -U remitx -d remitx"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   # Redis Cache & Queue
   redis:
     image: redis:7-alpine
-    container_name: afropay-redis
+    restart: unless-stopped
+    logging: *default-logging
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   # NestJS API
   api:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
-    container_name: afropay-api
-    environment:
-      DATABASE_URL: postgresql://afropay:${DB_PASSWORD:-dev_password}@postgres:5432/afropay_dev
-      REDIS_URL: redis://redis:6379
-      NODE_ENV: development
-      SOROBAN_RPC_URL: https://soroban-testnet.stellar.org
-      STELLAR_NETWORK: testnet
-      SOROBAN_CONTRACT_ADDRESS: ${SOROBAN_CONTRACT_ADDRESS}
-      SOROBAN_ADMIN_KEY: ${SOROBAN_ADMIN_KEY}
-      JWT_SECRET: ${JWT_SECRET:-dev_secret_key}
-      FRAUD_SERVICE_URL: http://fraud:8001
+    restart: unless-stopped
+    logging: *default-logging
     ports:
       - "3001:3001"
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DATABASE_URL: postgresql://remitx:remitx@postgres:5432/remitx
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: change_me_in_production
+      # Replace with a random 32-byte hex master key before deployment.
+      ENCRYPTION_KEY: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
+      STELLAR_NETWORK: testnet
+      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+      ANCHOR_USDC_URL: https://testanchor.stellar.org
+      ANCHOR_NGN_URL: https://testanchor.stellar.org
+      FRAUD_SERVICE_URL: http://python-analytics:8000
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      python-analytics:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
-      interval: 30s
+      test: ["CMD-SHELL", "node -e 'require(\"http\").get(\"http://127.0.0.1:3001/health\", ()=>process.exit(0)).on(\"error\", ()=>process.exit(1))' "]
+      interval: 15s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 15s
 
   # Next.js Frontend
   frontend:
     build:
       context: ./apps/frontend
       dockerfile: Dockerfile
-    container_name: afropay-frontend
-    environment:
-      NEXT_PUBLIC_API_URL: http://api:3001
-      NODE_ENV: development
+    restart: unless-stopped
+    logging: *default-logging
     ports:
       - "3000:3000"
-    depends_on:
-      - api
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  # Python Fraud Detection Service
-  fraud:
-    build:
-      context: ./services/python-analytics
-      dockerfile: Dockerfile
-    container_name: afropay-fraud
     environment:
-      PYTHONUNBUFFERED: 1
-      LOG_LEVEL: info
-    ports:
-      - "8001:8001"
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+    depends_on:
+      api:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD-SHELL", "node -e 'require(\"http\").get(\"http://127.0.0.1:3000\", ()=>process.exit(0)).on(\"error\", ()=>process.exit(1))' "]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 20s
 
-  # Rust Background Worker
-  worker:
+  rust-worker:
     build:
       context: ./services/rust-worker
       dockerfile: Dockerfile
-    container_name: afropay-worker
+    restart: unless-stopped
+    logging: *default-logging
     environment:
-      REDIS_URL: redis://redis:6379
-      SOROBAN_RPC_URL: https://soroban-testnet.stellar.org
-      STELLAR_NETWORK: testnet
-      RUST_LOG: info
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      STELLAR_HORIZON_URL: ${STELLAR_HORIZON_URL:-https://horizon-testnet.stellar.org}
+      METRICS_PORT: ${METRICS_PORT:-9898}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-10}
     depends_on:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9090/metrics"]
+      test: ["CMD-SHELL", "ps -ef | grep -q '[w]orker' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 20s
+
+  python-analytics:
+    build:
+      context: ./services/python-analytics
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request, sys; urllib.request.urlopen(\"http://127.0.0.1:8000/health\"); sys.exit(0)' "]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
-  postgres_data:
-  redis_data:
-
-networks:
-  default:
-    name: afropay-network
+  pgdata:
+  redisdata:

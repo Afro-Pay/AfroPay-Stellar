@@ -7,37 +7,176 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// Allowed lifecycle states for a Transaction.
+enum TransactionStatus {
+  PENDING
+  RETRYING
+  SUCCESS
+  FAILED
+  /// Transaction passed the fraud check but scored in the medium-risk band
+  /// (0.5 ≤ riskScore < 0.8) and is held for manual review before submission.
+  PENDING_REVIEW
+}
+
+/// Allowed lifecycle states for KYC records.
+enum KycStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// KYC verification tiers.
+enum KycTier {
+  NONE
+  BASIC
+  FULL
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
 model User {
   id           String        @id @default(uuid())
   email        String        @unique
   password     String
+  name         String?
+  role         UserRole      @default(USER)
+  erasedAt     DateTime?
   createdAt    DateTime      @default(now())
   wallet       Wallet?
   transactions Transaction[]
+  kyc          KycRecord?
+}
+
+/// Non-reversible lookup record used to make erasure idempotent after the
+/// original user identifier has been replaced. Never store the original ID.
+model AnonymizationTombstone {
+  id                  String   @id @default(uuid())
+  originalUserIdHash  String   @unique
+  pseudonymousUserId  String   @unique
+  erasedAt            DateTime @default(now())
+
+  @@index([erasedAt])
 }
 
 model Wallet {
-  id              String   @id @default(uuid())
-  userId          String   @unique
-  publicKey       String   @unique
+  id              String        @id @default(uuid())
+  /// Foreign key to the owning User. One wallet per user (enforced by @unique).
+  userId          String        @unique
+  /// Stellar public key – must be globally unique.
+  publicKey       String        @unique
   encryptedSecret String
-  createdAt       DateTime @default(now())
-  user            User     @relation(fields: [userId], references: [id])
+  encryptedDek    String?
+  kmsKeyId        String?
+  createdAt       DateTime      @default(now())
+  /// Automatically updated whenever the wallet record changes (e.g. key rotation).
+  updatedAt       DateTime      @updatedAt
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions    Transaction[]
 }
 
 model Transaction {
-  id             String   @id @default(uuid())
+  id             String            @id @default(uuid())
+  /// Foreign key to the User who initiated this transaction.
   userId         String
+  /// Foreign key to the Wallet used for this transaction.
+  walletId       String
+  /// Stellar destination public key – required, never null.
   destination    String
+  /// Transfer amount as a string to preserve decimal precision – required.
   amount         String
+  /// Stellar asset code (e.g. "XLM", "USDC") – required.
   assetCode      String
+  /// Asset issuer account; null for native XLM.
   assetIssuer    String?
+  /// Optional transaction memo.
   memo           String?
-  status         String   @default("PENDING")
-  stellarTxHash  String?
+  /// Client-supplied idempotency key (UUID) from the `Idempotency-Key` header
+  /// on POST /transactions/send. Null when the client omits the header.
+  idempotencyKey String?
+  /// Lifecycle state of this transaction.
+  status         TransactionStatus @default(PENDING)
+  /// Stellar transaction hash once submitted; unique across all confirmed txs.
+  stellarTxHash  String?           @unique
+  /// Fraud risk score from the analytics service.
   riskScore      Float?
-  flagged        Boolean  @default(false)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  user           User     @relation(fields: [userId], references: [id])
+  /// Whether this transaction has been flagged for review.
+  flagged        Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+
+  /// Guarantees at most one transaction per (user, idempotency key), so a
+  /// retried POST /transactions/send cannot create a duplicate transfer.
+  /// Postgres treats NULLs as distinct, so transactions without a key (the
+  /// header is optional) are unaffected.
+  @@unique([userId, idempotencyKey])
+  /// Speeds up per-user history queries (ordered by newest first).
+  @@index([userId, createdAt(sort: Desc)])
+  /// Speeds up per-wallet history queries.
+  @@index([walletId, createdAt(sort: Desc)])
+}
+
+model KycRecord {
+  id              String        @id @default(uuid())
+  userId          String        @unique
+  status          KycStatus     @default(PENDING)
+  tier            KycTier       @default(NONE)
+  documentType    String?
+  /// SHA-256 hex digest of the uploaded document, prefixed with the S3 object
+  /// key: "<s3-key>:<sha256-hex>". Set by POST /kyc/confirm-upload after hash
+  /// verification. Null until the upload is confirmed.
+  documentRef     String?
+  firstName       String?
+  lastName        String?
+  idType          String?
+  photoId         String?
+  submittedAt     DateTime?
+  reviewedAt      DateTime?
+  rejectionReason String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+}
+
+/// Structured audit log entry capturing security-relevant events.
+/// Each row is immutable by convention — never UPDATE or DELETE audit rows.
+model AuditLog {
+  id            String   @id @default(uuid())
+  /// The authenticated user who triggered the event (nullable for system events).
+  userId        String?
+  /// High-level event category: WALLET | TRANSACTION | AUTH
+  category      String
+  /// Specific operation: WALLET_CREATED | WALLET_EXPORTED | WALLET_IMPORTED |
+  ///   TX_SUBMITTED | TX_SUCCESS | TX_FAILED | TX_RETRYING
+  operation     String
+  /// Outcome of the operation: SUCCESS | FAILURE
+  outcome       String
+  /// Stellar public key involved, when applicable.
+  walletPublicKey String?
+  /// Transaction amount, when applicable.
+  amount        String?
+  /// Asset code (XLM, USDC, …), when applicable.
+  assetCode     String?
+  /// Destination Stellar address, when applicable.
+  destination   String?
+  /// Stellar transaction hash, when applicable.
+  txHash        String?
+  /// Additional freeform context serialised as JSON.
+  metadata      Json?
+  /// ISO-8601 timestamp — indexed for time-range queries during reviews.
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+  @@index([category])
+  @@index([operation])
+  @@index([createdAt])
 }

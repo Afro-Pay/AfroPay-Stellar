@@ -1,0 +1,11 @@
+# Rust's output directory
+target
+
+# Local settings
+.soroban
+.stellar
+.cargo
+
+# Deployment artifacts
+deployments/*.json
+!deployments/.gitkeep

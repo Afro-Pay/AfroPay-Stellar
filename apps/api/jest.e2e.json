@@ -1,0 +1,12 @@
+{
+  "preset": "ts-jest",
+  "testEnvironment": "node",
+  "testMatch": ["**/*.e2e-spec.ts"],
+  "moduleFileExtensions": ["ts", "js", "json"],
+  "testTimeout": 30000,
+  "globals": {
+    "ts-jest": {
+      "tsconfig": "./tsconfig.e2e.json"
+    }
+  }
+}

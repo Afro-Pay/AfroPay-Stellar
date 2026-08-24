@@ -1,9 +1,73 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { SorobanService } from '../soroban/soroban.service';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
-import { Queue } from 'bull';
-import axios from 'axios';
+import { JobOptions, Queue } from 'bull';
+import Redis from 'ioredis';
+import { PrismaService } from '../prisma/prisma.service';
+import { KycService } from '../kyc/kyc.service';
+import { TRANSACTION_QUEUE_NAME, TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
+
+export const HISTORY_MAX_LIMIT = 100;
+export const HISTORY_DEFAULT_LIMIT = 25;
+
+/** TTL for the cached send response, per the issue spec (24 hours). */
+export const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
+
+/** Postgres unique-violation code surfaced by Prisma. */
+const PRISMA_UNIQUE_VIOLATION = 'P2002';
+
+/**
+ * Minimal Redis-like store with TTL, used for unit tests or when REDIS_URL is
+ * not configured. Mirrors the fallback in AnchorService so the send path stays
+ * testable without a live Redis.
+ */
+class InMemoryTtlStore {
+  private store = new Map<string, { value: string; expiresAt: number | null }>();
+
+  async get(key: string): Promise<string | null> {
+    const entry = this.store.get(key);
+    if (!entry) return null;
+    if (entry.expiresAt && Date.now() > entry.expiresAt) {
+      this.store.delete(key);
+      return null;
+    }
+    return entry.value;
+  }
+
+  async set(key: string, value: string, _mode?: string, seconds?: number) {
+    const expiresAt = seconds ? Date.now() + seconds * 1000 : null;
+    this.store.set(key, { value, expiresAt });
+    return 'OK';
+  }
+}
+
+export interface GetHistoryOptions {
+  /** Maximum number of records to return. Capped at HISTORY_MAX_LIMIT (100). */
+  limit?: number;
+  /** Opaque cursor string — the `id` of the last transaction on the previous page. */
+  cursor?: string;
+}
+
+export interface PaginatedHistory {
+  data: Awaited<ReturnType<PrismaService['transaction']['findMany']>>;
+  nextCursor: string | null;
+  total: number;
+}
+
+export interface GetTransactionsOptions {
+  page?: number;
+  limit?: number;
+  status?: string;
+  assetCode?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface PaginatedTransactions {
+  data: Awaited<ReturnType<PrismaService['transaction']['findMany']>>;
+  total: number;
+  page: number;
+  limit: number;
+}
 
 export interface InitiateTransferDto {
   recipientCountry: string;
@@ -11,132 +75,251 @@ export interface InitiateTransferDto {
   fiatCurrency: string;
 }
 
+export interface SendTransferResponse {
+  txId: string;
+  status: string;
+}
+
+export interface SendTransferResult extends SendTransferResponse {
+  /**
+   * True when this response replays a prior request with the same idempotency
+   * key rather than creating a new transfer. The controller uses it to return
+   * HTTP 200 (replay) instead of 201 (created); the value is not sent to the
+   * client, so a replayed body is byte-identical to the original.
+   */
+  idempotentReplay: boolean;
+}
+
 @Injectable()
 export class TransactionService {
+  // Typed as `any` to bridge the ioredis client and the in-memory fallback,
+  // matching the established pattern in AnchorService.
+  private idempotencyCache: any;
+
   constructor(
+    @InjectQueue(TRANSACTION_QUEUE_NAME) private txQueue: Queue,
     private prisma: PrismaService,
-    private soroban: SorobanService,
-    @InjectQueue('transactions') private transactionQueue: Queue,
-  ) {}
+    private kycService: KycService,
+  ) {
+    const redisUrl = process.env.REDIS_URL;
+    this.idempotencyCache =
+      process.env.NODE_ENV === 'test' || !redisUrl
+        ? new InMemoryTtlStore()
+        : new Redis(redisUrl);
+  }
 
   /**
-   * Initiate a cross-border remittance transfer
-   * 1. Validate sender & recipient (KYC)
-   * 2. Check fraud score
-   * 3. Get exchange rate
-   * 4. Create escrow on Soroban contract
-   * 5. Queue background job to track oracle confirmation
+   * Idempotent transfer submission.
+   *
+   * When `idempotencyKey` is supplied, a retried POST /transactions/send can
+   * neither create a second Transaction row nor enqueue a second job:
+   * 1. Fast path — a cached response for the key is returned immediately.
+   * 2. Reservation — the row is created with the key; the unique constraint on
+   *    `(userId, idempotencyKey)` makes a concurrent duplicate lose the race
+   *    with a P2002 violation *before* anything is enqueued.
+   * 3. Queue dedup — the job carries a deterministic `jobId` derived from the
+   *    key, so even a job that slips past the DB collapses to one.
    */
-  async initiateTransfer(userId: string, dto: InitiateTransferDto): Promise<any> {
-    // Get sender's wallet
-    const wallet = await this.prisma.wallet.findUnique({
-      where: { userId },
-    });
-
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
+  async sendTransfer(
+    userId: string,
+    dto: SendTransferDto,
+    idempotencyKey?: string,
+  ): Promise<SendTransferResult> {
+    if (idempotencyKey) {
+      const replay = await this.readCachedResponse(userId, idempotencyKey);
+      if (replay) return { ...replay, idempotentReplay: true };
     }
 
-    // Validate recipient country (KYC requirement)
-    const supportedCountries = ['NG', 'GH', 'KE'];
-    if (!supportedCountries.includes(dto.recipientCountry)) {
-      throw new BadRequestException('Unsupported recipient country');
+    const amountUsd = await this.kycService.normalizeAmountToUsd(dto.amount, dto.assetCode);
+    await this.kycService.assertWithinDailyLimit(userId, amountUsd);
+
+    // Resolve the wallet FK – every transfer must originate from the user's wallet.
+    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+    if (!wallet) throw new NotFoundException('Wallet not found for user');
+
+    let tx;
+    try {
+      tx = await this.prisma.transaction.create({
+        data: {
+          userId,
+          walletId: wallet.id,
+          destination: dto.destinationPublicKey,
+          amount: dto.amount,
+          assetCode: dto.assetCode,
+          assetIssuer: dto.assetIssuer ?? null,
+          memo: dto.memo ?? null,
+          idempotencyKey: idempotencyKey ?? null,
+          status: 'PENDING',
+        },
+      });
+    } catch (err) {
+      // A concurrent request with the same key won the unique-constraint race.
+      // Return its transaction instead of creating a duplicate.
+      if (idempotencyKey && this.isUniqueViolation(err)) {
+        return this.replayFromDb(userId, idempotencyKey, dto);
+      }
+      throw err;
     }
 
-    // Call fraud detection service
-    const fraudScore = await this.checkFraudScore(userId, dto.fiatAmount, dto.recipientCountry);
-    if (fraudScore > 0.7) {
-      throw new BadRequestException(`Transfer blocked due to high fraud score: ${fraudScore}`);
+    await this.enqueueJob(tx.id, userId, dto, idempotencyKey);
+
+    const response: SendTransferResponse = { txId: tx.id, status: tx.status };
+    if (idempotencyKey) {
+      await this.writeCachedResponse(userId, idempotencyKey, response);
     }
+    return { ...response, idempotentReplay: false };
+  }
 
-    // Get current exchange rate from price feed
-    const exchangeRate = await this.getExchangeRate(dto.recipientCountry);
-    const usdcAmount = Math.floor((dto.fiatAmount / exchangeRate) * 1e7); // Convert to stroops
+  async sendPayment(userId: string, dto: SendTransferDto, idempotencyKey?: string) {
+    return this.sendTransfer(userId, dto, idempotencyKey);
+  }
 
-    if (usdcAmount < 1e6 || usdcAmount > 1e14) {
-      throw new BadRequestException('Transfer amount outside allowed range');
+  private idempotencyCacheKey(userId: string, key: string): string {
+    return `idempotency:${userId}:${key}`;
+  }
+
+  private async readCachedResponse(
+    userId: string,
+    key: string,
+  ): Promise<SendTransferResponse | null> {
+    const raw = await this.idempotencyCache.get(this.idempotencyCacheKey(userId, key));
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as SendTransferResponse;
+    } catch {
+      return null;
     }
+  }
 
-    // Hash recipient account (privacy-preserving)
-    const recipientAccountHash = Buffer.from('hash_placeholder');
-
-    // Deposit to Soroban escrow
-    const escrowId = await this.soroban.depositEscrow(wallet.encryptedSecret, {
-      sender: wallet.publicKey,
-      agent: process.env.DEFAULT_AGENT_ADDRESS!,
-      amount: BigInt(usdcAmount),
-      recipientCountry: dto.recipientCountry,
-      recipientAccountHash,
-      fiatAmount: BigInt(dto.fiatAmount),
-      fiatCurrency: dto.fiatCurrency,
-      exchangeRate: BigInt(Math.floor(exchangeRate * 1e6)),
-      timeoutMinutes: 120, // 2-hour timeout
-    });
-
-    // Record transaction in database
-    const transaction = await this.prisma.transaction.create({
-      data: {
-        userId,
-        destination: dto.recipientCountry,
-        amount: usdcAmount.toString(),
-        assetCode: 'USDC',
-        assetIssuer: process.env.USDC_ISSUER,
-        memo: escrowId,
-        status: 'PENDING',
-        riskScore: fraudScore,
-        flagged: fraudScore > 0.5,
-      },
-    });
-
-    // Queue background job to monitor oracle confirmation
-    await this.transactionQueue.add(
-      'monitor-escrow',
-      { escrowId, transactionId: transaction.id },
-      { delay: 5000, attempts: 3 },
+  private async writeCachedResponse(
+    userId: string,
+    key: string,
+    response: SendTransferResponse,
+  ): Promise<void> {
+    await this.idempotencyCache.set(
+      this.idempotencyCacheKey(userId, key),
+      JSON.stringify(response),
+      'EX',
+      IDEMPOTENCY_TTL_SECONDS,
     );
-
-    return {
-      transactionId: transaction.id,
-      escrowId,
-      status: 'PENDING',
-      amount: usdcAmount,
-      usdcAmount: (usdcAmount / 1e7).toFixed(2),
-      fiatAmount: dto.fiatAmount,
-      fiatCurrency: dto.fiatCurrency,
-      exchangeRate: (exchangeRate / 1e6).toFixed(6),
-      estimatedTime: '5-10 minutes',
-    };
   }
 
-  /**
-   * Get transaction status
-   */
-  async getTransactionStatus(transactionId: string): Promise<any> {
-    const transaction = await this.prisma.transaction.findUnique({
-      where: { id: transactionId },
+  private async replayFromDb(
+    userId: string,
+    idempotencyKey: string,
+    dto: SendTransferDto,
+  ): Promise<SendTransferResult> {
+    const existing = await this.prisma.transaction.findFirst({
+      where: { userId, idempotencyKey },
     });
+    if (!existing) {
+      // The row that caused the violation is gone — nothing coherent to replay.
+      throw new BadRequestException('Idempotency key conflict could not be resolved');
+    }
+    // Crash-window safety: if the winning request died before enqueueing, this
+    // re-adds the job. The deterministic jobId makes an already-queued job a
+    // no-op, so this never produces a duplicate.
+    await this.enqueueJob(existing.id, userId, dto, idempotencyKey);
+    const response: SendTransferResponse = { txId: existing.id, status: existing.status };
+    await this.writeCachedResponse(userId, idempotencyKey, response);
+    return { ...response, idempotentReplay: true };
+  }
 
-    if (!transaction) {
-      throw new NotFoundException('Transaction not found');
+  private async enqueueJob(
+    txId: string,
+    userId: string,
+    dto: SendTransferDto,
+    idempotencyKey?: string,
+  ): Promise<void> {
+    const options: JobOptions = { ...TRANSACTION_QUEUE_OPTIONS };
+    if (idempotencyKey) {
+      // Deterministic jobId → BullMQ collapses duplicate enqueues for the same
+      // (user, key) into a single job.
+      options.jobId = `send:${userId}:${idempotencyKey}`;
+    }
+    await this.txQueue.add('process', { txId, userId, ...dto }, options);
+  }
+
+  private isUniqueViolation(err: unknown): boolean {
+    return (
+      typeof err === 'object' &&
+      err !== null &&
+      (err as { code?: string }).code === PRISMA_UNIQUE_VIOLATION
+    );
+  }
+
+  async getHistory(userId: string, options: GetHistoryOptions = {}): Promise<PaginatedHistory> {
+    const rawLimit = options.limit ?? HISTORY_DEFAULT_LIMIT;
+
+    if (rawLimit > HISTORY_MAX_LIMIT) {
+      throw new BadRequestException(
+        `limit must not exceed ${HISTORY_MAX_LIMIT}. Received: ${rawLimit}`,
+      );
     }
 
-    // Fetch escrow state from Soroban
-    const escrowState = await this.soroban.getEscrow(transaction.memo || '');
+    const limit = Math.max(1, rawLimit);
+    const cursor = options.cursor;
 
-    return {
-      ...transaction,
-      escrowState,
-    };
+    // Total count for the user — used for "X of N" UI labels.
+    const total = await this.prisma.transaction.count({ where: { userId } });
+
+    // Fetch one extra record beyond the requested limit to determine whether a
+    // next page exists without a separate query.
+    const rows = await this.prisma.transaction.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: limit + 1,
+      ...(cursor
+        ? {
+            cursor: { id: cursor },
+            skip: 1, // skip the cursor row itself
+          }
+        : {}),
+    });
+
+    const hasNextPage = rows.length > limit;
+    const data = hasNextPage ? rows.slice(0, limit) : rows;
+    const nextCursor = hasNextPage ? data[data.length - 1].id : null;
+
+    return { data, nextCursor, total };
   }
 
-  /**
-   * List user's transactions
-   */
-  async getUserTransactions(userId: string, skip: number = 0, take: number = 10): Promise<any> {
-    const transactions = await this.prisma.transaction.findMany({
-      where: { userId },
-      skip,
-      take,
+  async getTransactions(
+    userId: string,
+    options: GetTransactionsOptions = {},
+  ): Promise<PaginatedTransactions> {
+    const page = Math.max(1, options.page ?? 1);
+    const limit = Math.min(HISTORY_MAX_LIMIT, Math.max(1, options.limit ?? HISTORY_DEFAULT_LIMIT));
+    const where = {
+      userId,
+      ...(options.status ? { status: options.status as any } : {}),
+      ...(options.assetCode ? { assetCode: options.assetCode } : {}),
+      ...((options.from || options.to)
+        ? {
+            createdAt: {
+              ...(options.from ? { gte: new Date(options.from) } : {}),
+              ...(options.to ? { lte: new Date(options.to) } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const [total, data] = await Promise.all([
+      this.prisma.transaction.count({ where }),
+      this.prisma.transaction.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    return { data, total, page, limit };
+  }
+
+  async getTransactionsByWallet(walletId: string) {
+    return this.prisma.transaction.findMany({
+      where: { walletId },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -178,66 +361,56 @@ export class TransactionService {
     return { escrowId: attestation.escrowId, status: 'RELEASED' };
   }
 
-  /**
-   * Claim refund (after timeout or failure)
-   */
-  async claimRefund(userId: string, transactionId: string): Promise<any> {
-    const transaction = await this.prisma.transaction.findUnique({
-      where: { id: transactionId },
-    });
+  async getTransaction(txId: string, userId?: string) {
+    const tx = await this.prisma.transaction.findUnique({ where: { id: txId } });
+    
+    if (!tx || (userId && tx.userId !== userId)) {
+      throw new NotFoundException('Transaction not found');
+    }
+    
+    return tx;
+  }
 
-    if (!transaction || transaction.userId !== userId) {
+  async updateRiskScore(txId: string, riskScore: number, flagged: boolean) {
+    const tx = await this.prisma.transaction.findUnique({ where: { id: txId } });
+    if (!tx) {
       throw new NotFoundException('Transaction not found');
     }
 
-    const wallet = await this.prisma.wallet.findUnique({
-      where: { userId },
-    });
-
-    // Claim refund from Soroban contract
-    await this.soroban.claimRefund(wallet!.encryptedSecret, transaction.memo || '');
-
-    // Update transaction status
-    await this.prisma.transaction.update({
-      where: { id: transactionId },
-      data: { status: 'REFUNDED' },
-    });
-
-    return {
-      transactionId,
-      status: 'REFUNDED',
-      amount: transaction.amount,
+    const data: any = {
+      riskScore,
+      flagged,
     };
-  }
 
-  // Helper methods
-
-  private async checkFraudScore(userId: string, amount: number, country: string): Promise<number> {
-    try {
-      const response = await axios.post(
-        `${process.env.FRAUD_SERVICE_URL}/score`,
-        {
-          tx_id: userId,
-          amount,
-          destination_country: country,
-          source_country: 'US',
-        },
-      );
-      return response.data.risk_score || 0;
-    } catch (error) {
-      // Default to medium score if service unavailable
-      return 0.5;
+    if (flagged && (tx.status === 'PENDING' || tx.status === 'RETRYING')) {
+      data.status = 'PENDING_REVIEW';
     }
+
+    return this.prisma.transaction.update({
+      where: { id: txId },
+      data,
+    });
   }
 
-  private async getExchangeRate(country: string): Promise<number> {
-    // Fetch from rate feed (could be Soroban contract, API, or cache)
-    const rateMap: Record<string, number> = {
-      NG: 411.5, // USD/NGN
-      GH: 12.5,  // USD/GHS
-      KE: 131.2, // USD/KES
-    };
+  async updateTransactionStatus(
+    txId: string,
+    status: 'PENDING' | 'RETRYING' | 'SUCCESS' | 'FAILED' | 'PENDING_REVIEW',
+    stellarTxHash?: string,
+  ) {
+    const updated = await this.prisma.transaction.update({
+      where: { id: txId },
+      data: {
+        status,
+        ...(stellarTxHash ? { stellarTxHash } : {}),
+      },
+    });
 
-    return rateMap[country] || 1.0;
+    if (status === 'SUCCESS') {
+      const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+      await redis.del(`wallet_balances:${updated.userId}`);
+      redis.disconnect();
+    }
+
+    return updated;
   }
 }
