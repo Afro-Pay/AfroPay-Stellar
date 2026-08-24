@@ -1,8 +1,8 @@
 # Test Status Report
 
-**Date**: June 25, 2026  
-**Branch**: `feature/real-time-transactions`  
-**Status**: Tests Structure Verified ✅
+**Date**: August 22, 2026  
+**Branch**: `feature/e2e-remittance-lifecycle`  
+**Status**: E2E suite extended — full remittance lifecycle + failure scenarios ✅
 
 ## Current Test Files
 
@@ -32,6 +32,129 @@ All existing test files are present and properly structured:
 - `apps/api/test/adversarial/auth-bypass.spec.ts` - Six red-team scenarios covering JWT algorithm confusion, missing and malformed authentication on KYC-protected routes, forwarded-IP rate-limit spoofing, transaction amount tampering, and cross-user wallet UUID access
 - Run independently with `npm run test:adversarial` from `apps/api`
 - Self-contained HTTP harness; no database, Redis, Stellar, or other external service is required
+
+### E2E — Full Remittance Lifecycle ✅ (new)
+
+| File | Description |
+|---|---|
+| `apps/api/test/e2e/remittance-lifecycle.e2e-spec.ts` | 7-step lifecycle + 3 failure scenarios |
+| `apps/api/test/e2e/mock-anchor.ts` | In-process SEP-6/24 mock anchor server |
+| `apps/api/test/e2e/friendbot.ts` | Stellar Friendbot funding & Horizon polling helpers |
+| `apps/api/test/e2e/remittance.e2e-spec.ts` | Original E2E suite (mocked Horizon + axios) |
+
+**7-Step lifecycle covered in `remittance-lifecycle.e2e-spec.ts`:**
+
+1. Register user + login → obtain JWT
+2. Submit KYC → admin-approve → BASIC tier ($5 000/day limit)
+3. Create Stellar wallet + fund via Friendbot (testnet) / mock (CI)
+4. Dry-run: FX-rate lookup + anchor withdraw info
+5. Send transfer → PENDING (enqueued to BullMQ)
+6. Confirm Horizon settlement (Rust worker simulated in CI)
+7. Verify AuditLog entries are present and immutable
+
+**3 Failure scenarios:**
+
+| Scenario | Trigger | Expected result |
+|---|---|---|
+| F-1 Insufficient balance | `op_underfunded` from Horizon | Transaction → FAILED |
+| F-2 Missing trustline | `op_no_trust` from Horizon | Transaction → FAILED |
+| F-3 KYC daily limit exceeded | NONE-tier user sends > $100/day | HTTP 403 |
+
+---
+
+## Running the E2E Suite
+
+### Prerequisites
+
+| Service | Required for |
+|---|---|
+| PostgreSQL (via Docker or local) | All E2E tests |
+| Redis (via Docker or local) | All E2E tests |
+| NestJS API (started by the test harness) | All E2E tests |
+
+Ensure `DATABASE_URL` and `REDIS_URL` are set before running.  
+The test harness boots the NestJS app in-process — no separate `npm run start:dev` is needed.
+
+### Run (fast — fully mocked, recommended for CI)
+
+```bash
+cd apps/api
+
+# Ensure dependencies are installed
+npm install
+
+# Run the full E2E suite (all *.e2e-spec.ts files)
+npm run test:e2e
+```
+
+The suite completes in **< 3 minutes** with all mocks active (Stellar SDK + axios pointing at the in-process mock anchor).
+
+### Run with real Stellar testnet Horizon
+
+```bash
+cd apps/api
+
+STELLAR_NETWORK=testnet \
+STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org \
+SKIP_FRIENDBOT=false \
+SKIP_HORIZON_POLL=false \
+npm run test:e2e
+```
+
+> ⚠ Real testnet runs add ~30 s per test that calls Friendbot or polls Horizon. Ensure your environment has outbound HTTPS access to `horizon-testnet.stellar.org` and `friendbot.stellar.org`.
+
+### Run with the Docker mock-anchor service
+
+The mock anchor is available under the `test` Docker Compose profile:
+
+```bash
+# Start only the mock anchor
+docker compose --profile test up mock-anchor -d
+
+# Then run the E2E suite, pointing the API at the Dockerised anchor
+ANCHOR_USDC_URL=http://localhost:4100 \
+ANCHOR_NGN_URL=http://localhost:4100 \
+npm run test:e2e
+
+# Tear down
+docker compose --profile test down
+```
+
+### Environment variables for the E2E suite
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | (required) | PostgreSQL connection string |
+| `REDIS_URL` | `redis://localhost:6379` | Redis / BullMQ connection |
+| `JWT_SECRET` | `change_me_in_production` | JWT signing key |
+| `ENCRYPTION_KEY` | (32-byte hex) | Wallet key encryption |
+| `STELLAR_NETWORK` | `testnet` | Controls Friendbot + Horizon calls |
+| `STELLAR_HORIZON_URL` | `https://horizon-testnet.stellar.org` | Horizon endpoint |
+| `ANCHOR_USDC_URL` | `http://127.0.0.1:<random>` | Set by in-process mock anchor |
+| `ANCHOR_NGN_URL` | `http://127.0.0.1:<random>` | Set by in-process mock anchor |
+| `SKIP_FRIENDBOT` | `true` (in CI) | Skip the Friendbot HTTP call |
+| `SKIP_HORIZON_POLL` | `true` (in CI) | Skip Horizon polling |
+| `FRIENDBOT_URL` | `https://friendbot.stellar.org` | Override Friendbot endpoint |
+
+### CI integration
+
+The suite is designed to run in GitHub Actions with:
+
+```yaml
+env:
+  DATABASE_URL: postgresql://remitx:remitx@localhost:5432/remitx
+  REDIS_URL: redis://localhost:6379
+  JWT_SECRET: ci-test-secret
+  ENCRYPTION_KEY: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
+  STELLAR_NETWORK: testnet
+  STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+  SKIP_FRIENDBOT: "true"
+  SKIP_HORIZON_POLL: "true"
+```
+
+See `.github/workflows/ci.yml` for the full pipeline.
+
+---
 
 ## Test Infrastructure
 

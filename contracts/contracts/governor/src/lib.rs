@@ -3,8 +3,8 @@
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map, String};
 
 const DEFAULT_FEE_BPS: u32 = 100;
-pub const VERSION: u32 = 2;
-pub const STORAGE_VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
+pub const STORAGE_VERSION: u32 = 3;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -18,6 +18,7 @@ pub enum DataKey {
     FeeBps,
     AmmPairCount,
     StorageVersion,
+    Executors,
 }
 
 #[contracttype]
@@ -79,6 +80,9 @@ impl Contract {
         env.storage().instance().set(&DataKey::AmmPairCount, &0u32);
         env.storage()
             .instance()
+            .set(&DataKey::Executors, &Map::<Address, bool>::new(&env));
+        env.storage()
+            .instance()
             .set(&DataKey::StorageVersion, &STORAGE_VERSION);
     }
 
@@ -101,11 +105,89 @@ impl Contract {
         if current_version > STORAGE_VERSION {
             panic!("storage version is newer than this contract");
         }
+        if !env.storage().instance().has(&DataKey::Executors) {
+            env.storage()
+                .instance()
+                .set(&DataKey::Executors, &Map::<Address, bool>::new(&env));
+        }
+
         if current_version < STORAGE_VERSION {
             env.storage()
                 .instance()
                 .set(&DataKey::StorageVersion, &STORAGE_VERSION);
         }
+    }
+
+    /// Grants execution rights to `executor`. Admin-only. Part of the
+    /// executor allowlist that supplements the always-authorized admin and
+    /// proposer (see `execute` for the full authorization model).
+    pub fn add_executor(env: Env, admin: Address, executor: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("contract not initialized");
+        if admin != stored_admin {
+            panic!("unauthorized admin");
+        }
+
+        let mut executors: Map<Address, bool> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Executors)
+            .unwrap_or_else(|| Map::new(&env));
+        executors.set(executor, true);
+        env.storage().instance().set(&DataKey::Executors, &executors);
+    }
+
+    /// Revokes execution rights previously granted via `add_executor`.
+    /// Admin-only.
+    pub fn remove_executor(env: Env, admin: Address, executor: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("contract not initialized");
+        if admin != stored_admin {
+            panic!("unauthorized admin");
+        }
+
+        let mut executors: Map<Address, bool> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Executors)
+            .unwrap_or_else(|| Map::new(&env));
+        executors.remove(executor);
+        env.storage().instance().set(&DataKey::Executors, &executors);
+    }
+
+    /// Returns true if `executor` is allowed to call `execute`: the admin,
+    /// the proposal's proposer, or an address on the explicit allowlist.
+    pub fn is_executor(env: Env, proposal_id: u64, executor: Address) -> bool {
+        let stored_admin: Option<Address> = env.storage().instance().get(&DataKey::Admin);
+        if stored_admin.as_ref() == Some(&executor) {
+            return true;
+        }
+
+        let proposals: Map<u64, Proposal> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Proposals)
+            .unwrap_or_else(|| Map::new(&env));
+        if let Some(proposal) = proposals.get(proposal_id) {
+            if proposal.proposer == executor {
+                return true;
+            }
+        }
+
+        let executors: Map<Address, bool> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Executors)
+            .unwrap_or_else(|| Map::new(&env));
+        executors.get(executor).unwrap_or(false)
     }
 
     pub fn set_stake(env: Env, admin: Address, voter: Address, amount: i128) {
@@ -203,11 +285,36 @@ impl Contract {
         true
     }
 
+    // Authorization model: execution is restricted to the admin, the
+    // proposal's own proposer, or an address explicitly granted via
+    // `add_executor`. This closes the race where any authenticated address
+    // could front-run the intended executor of a passing proposal. See
+    // docs/governor-execution-authorization.md for the full rationale.
     pub fn execute(env: Env, caller: Address, proposal_id: u64) -> bool {
         caller.require_auth();
 
         let mut proposals: Map<u64, Proposal> = env.storage().instance().get(&DataKey::Proposals).unwrap_or_else(|| Map::new(&env));
         let mut proposal = proposals.get(proposal_id).unwrap_or_else(|| panic!("proposal not found"));
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("contract not initialized");
+        let is_allowlisted = if caller == stored_admin || caller == proposal.proposer {
+            true
+        } else {
+            let executors: Map<Address, bool> = env
+                .storage()
+                .instance()
+                .get(&DataKey::Executors)
+                .unwrap_or_else(|| Map::new(&env));
+            executors.get(caller.clone()).unwrap_or(false)
+        };
+        if !is_allowlisted {
+            panic!("unauthorized executor");
+        }
+
         if proposal.state != ProposalState::Active {
             return false;
         }

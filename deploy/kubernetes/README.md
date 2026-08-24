@@ -81,7 +81,29 @@ The manifests configure local persistent storage for database backups and cache/
 
 ## Deploying the Stack
 
-To deploy the manifests to your cluster:
+### Automated Deployment (Recommended)
+
+The project includes an automated GitHub Actions workflow for production deployments with health checks and automatic rollback.
+
+**For mainnet deployments:**
+```bash
+# Tag a release
+git tag v1.2.3
+git push origin v1.2.3
+
+# GitHub Actions automatically:
+# 1. Builds and pushes Docker images
+# 2. Runs database migrations
+# 3. Deploys to Kubernetes with zero downtime
+# 4. Monitors health for 5 minutes
+# 5. Automatically rolls back on failure
+```
+
+📚 **See [DEPLOYMENT_PIPELINE.md](./DEPLOYMENT_PIPELINE.md) for complete documentation.**
+
+### Manual Deployment
+
+For local development or testing:
 
 ```bash
 # 1. Create the namespace
@@ -116,4 +138,4 @@ kubectl wait --for=condition=complete --timeout=300s job/api-migration-post-depl
 kubectl apply -f ingress.yaml
 ```
 
-See [docs/zero-downtime-migrations.md](../../docs/zero-downtime-migrations.md) for how migrations are classified as safe or breaking, and for the rollback runbook.
+⚠️ **Warning**: Manual deployments do not include automated health checks or rollback capabilities. Use the automated pipeline for production.

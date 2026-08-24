@@ -4,16 +4,17 @@ import { TransactionService } from './transaction.service';
 import { TransactionController } from './transaction.controller';
 import { TransactionDlqController } from './transaction-dlq.controller';
 import { TransactionDlqService } from './transaction-dlq.service';
+import { TRANSACTION_QUEUE_NAME, TRANSACTION_DLQ_QUEUE_NAME } from './transaction-retry.config';
 import { TransactionProcessor } from './transaction.processor';
 import { TransferSimulationService } from './transfer-simulation.service';
 import { FraudService } from './fraud.service';
-import { AdminGuard } from '../admin/admin.guard';
 import { PrismaModule } from '../prisma/prisma.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AuthModule } from '../auth/auth.module';
 import { KycModule } from '../kyc/kyc.module';
 import { AnchorModule } from '../anchor/anchor.module';
 import { AuditModule } from '../audit/audit.module';
+import { RedisLockService } from '../common/lock/lock.service';
 
 @Module({
   imports: [
@@ -34,8 +35,10 @@ import { AuditModule } from '../audit/audit.module';
     TransactionDlqService,
     TransferSimulationService,
     FraudService,
+    ComplianceService,
     AdminGuard,
+    RedisLockService,
   ],
-  controllers: [TransactionController, TransactionDlqController],
+  controllers: [TransactionController, TransactionDlqController, ComplianceController],
 })
 export class TransactionModule {}
