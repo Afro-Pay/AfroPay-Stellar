@@ -1,8 +1,12 @@
-import { Controller, Get, Query, Res, UseGuards, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { Response } from 'express';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { AdminGuard } from '../admin/admin.guard';
+import {
+  Controller,
+  Get,
+  Query,
+  UseGuards,
+  ParseIntPipe,
+  DefaultValuePipe,
+} from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import { AuditLogService } from './audit.service';
 
 /**

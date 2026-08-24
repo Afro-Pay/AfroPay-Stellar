@@ -2,7 +2,7 @@ import { Injectable, Optional } from '@nestjs/common';
 import { Process, Processor } from '@nestjs/bull';
 import { Job } from 'bull';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuditLogService, AuditCategory, AuditOperation, AuditOutcome } from '../audit/audit.service';
+import { AuditCategory, AuditLogService, AuditOutcome } from '../audit/audit.service';
 import { Logger } from 'nestjs-pino';
 import { FraudService } from './fraud.service';
 import { assertTransactionAmountIntegrity } from './transaction-integrity';
@@ -107,12 +107,9 @@ export class TransactionProcessor {
     await this.auditService.log({
       userId,
       category: AuditCategory.TRANSACTION,
-      operation: AuditOperation.TX_SUBMITTED,
+      operation: 'TRANSACTION_INITIATE',
       outcome: AuditOutcome.SUCCESS,
-      destination: toAddress,
-      amount,
-      assetCode,
-      metadata: { transactionId: transaction.id },
+      metadata: { transactionId: transaction.id, toAddress, amount, assetCode },
     });
 
     this.logger.log({
@@ -151,12 +148,10 @@ export class TransactionProcessor {
       await this.auditService.log({
         userId,
         category: AuditCategory.TRANSACTION,
-        operation: AuditOperation.TX_SUCCESS,
+        operation: 'TRANSACTION_COMPLETE',
         outcome: AuditOutcome.SUCCESS,
-        destination: toAddress,
-        amount,
         txHash: result.hash,
-        metadata: { transactionId: transaction.id },
+        metadata: { transactionId: transaction.id, toAddress, amount },
       });
 
       this.logger.log({
@@ -176,11 +171,9 @@ export class TransactionProcessor {
       await this.auditService.log({
         userId,
         category: AuditCategory.TRANSACTION,
-        operation: AuditOperation.TX_FAILED,
+        operation: 'TRANSACTION_FAILED',
         outcome: AuditOutcome.FAILURE,
-        destination: toAddress,
-        amount,
-        metadata: { transactionId: transaction.id, error: error.message },
+        metadata: { transactionId: transaction.id, toAddress, amount, error: error.message },
       });
 
       this.logger.error({
@@ -248,7 +241,7 @@ export class TransactionProcessor {
       await this.auditService.log({
         userId,
         category: AuditCategory.TRANSACTION,
-        operation: AuditOperation.TX_FAILED,
+        operation: 'TRANSACTION_FAILED',
         outcome: AuditOutcome.FAILURE,
         metadata: {
           transactionId: transaction.id,
@@ -277,7 +270,7 @@ export class TransactionProcessor {
       await this.auditService.log({
         userId,
         category: AuditCategory.TRANSACTION,
-        operation: AuditOperation.TX_BLOCKED,
+        operation: 'TRANSACTION_BLOCKED',
         outcome: AuditOutcome.FAILURE,
         metadata: {
           transactionId: transaction.id,
@@ -307,8 +300,8 @@ export class TransactionProcessor {
       await this.auditService.log({
         userId,
         category: AuditCategory.TRANSACTION,
-        operation: AuditOperation.TX_PENDING_REVIEW,
-        outcome: AuditOutcome.FAILURE,
+        operation: 'TRANSACTION_PENDING_REVIEW',
+        outcome: AuditOutcome.SUCCESS,
         metadata: {
           transactionId: transaction.id,
           riskScore,

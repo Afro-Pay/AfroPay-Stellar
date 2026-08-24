@@ -54,7 +54,7 @@ export class AdminComplianceService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { wallet: true, kyc: true },
+      include: { wallets: true, kyc: true },
     });
     if (!user) throw new NotFoundException('User not found');
 
@@ -73,9 +73,9 @@ export class AdminComplianceService {
         },
       });
 
-      if (user.wallet) {
+      for (const wallet of user.wallets) {
         await tx.wallet.update({
-          where: { id: user.wallet.id },
+          where: { id: wallet.id },
           data: {
             userId: pseudonymousUserId,
             encryptedSecret: `ERASED:${randomBytes(32).toString('hex')}`,

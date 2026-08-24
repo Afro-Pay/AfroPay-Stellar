@@ -4,6 +4,8 @@ import { JobOptions, Queue } from 'bull';
 import Redis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { KycService } from '../kyc/kyc.service';
+import { SorobanService } from '../soroban/soroban.service';
+import { SendDto } from './dto';
 import { TRANSACTION_QUEUE_NAME, TRANSACTION_QUEUE_OPTIONS } from './transaction-retry.config';
 
 export const HISTORY_MAX_LIMIT = 100;
@@ -100,6 +102,7 @@ export class TransactionService {
     @InjectQueue(TRANSACTION_QUEUE_NAME) private txQueue: Queue,
     private prisma: PrismaService,
     private kycService: KycService,
+    private soroban: SorobanService,
   ) {
     const redisUrl = process.env.REDIS_URL;
     this.idempotencyCache =
@@ -122,7 +125,7 @@ export class TransactionService {
    */
   async sendTransfer(
     userId: string,
-    dto: SendTransferDto,
+    dto: SendDto,
     idempotencyKey?: string,
   ): Promise<SendTransferResult> {
     if (idempotencyKey) {
@@ -134,7 +137,7 @@ export class TransactionService {
     await this.kycService.assertWithinDailyLimit(userId, amountUsd);
 
     // Resolve the wallet FK – every transfer must originate from the user's wallet.
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+    const wallet = await this.prisma.wallet.findFirst({ where: { userId } });
     if (!wallet) throw new NotFoundException('Wallet not found for user');
 
     let tx;
@@ -170,7 +173,7 @@ export class TransactionService {
     return { ...response, idempotentReplay: false };
   }
 
-  async sendPayment(userId: string, dto: SendTransferDto, idempotencyKey?: string) {
+  async sendPayment(userId: string, dto: SendDto, idempotencyKey?: string) {
     return this.sendTransfer(userId, dto, idempotencyKey);
   }
 
@@ -207,7 +210,7 @@ export class TransactionService {
   private async replayFromDb(
     userId: string,
     idempotencyKey: string,
-    dto: SendTransferDto,
+    dto: SendDto,
   ): Promise<SendTransferResult> {
     const existing = await this.prisma.transaction.findFirst({
       where: { userId, idempotencyKey },
@@ -228,7 +231,7 @@ export class TransactionService {
   private async enqueueJob(
     txId: string,
     userId: string,
-    dto: SendTransferDto,
+    dto: SendDto,
     idempotencyKey?: string,
   ): Promise<void> {
     const options: JobOptions = { ...TRANSACTION_QUEUE_OPTIONS };
@@ -321,16 +324,8 @@ export class TransactionService {
     return this.prisma.transaction.findMany({
       where: { walletId },
       orderBy: { createdAt: 'desc' },
+      take: 50,
     });
-
-    const total = await this.prisma.transaction.count({ where: { userId } });
-
-    return {
-      transactions,
-      total,
-      skip,
-      take,
-    };
   }
 
   /**
@@ -352,7 +347,7 @@ export class TransactionService {
       await this.prisma.transaction.update({
         where: { id: transaction.id },
         data: {
-          status: attestation.deliverySuccess ? 'COMPLETED' : 'FAILED',
+          status: attestation.deliverySuccess ? 'SUCCESS' : 'FAILED',
           stellarTxHash: attestation.signature,
         },
       });

@@ -1,9 +1,9 @@
 class MockRedis {
   private static store = new Map<string, { count: number; expiresAt: number }>();
-  
-  constructor(url: string, options: any) {}
 
   disconnect() {}
+
+  quit() { return Promise.resolve(); }
 
   async eval(script: string, numKeys: number, key: string, limit: any, windowMs: any, nowMs: any) {
     const limitVal = Number(limit);

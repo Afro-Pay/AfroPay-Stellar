@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -5,6 +6,8 @@ export enum AuditCategory {
   WALLET = 'WALLET',
   TRANSACTION = 'TRANSACTION',
   AUTH = 'AUTH',
+  COMPLIANCE = 'COMPLIANCE',
+  KYC = 'KYC',
 }
 
 export enum AuditOperation {
@@ -15,6 +18,13 @@ export enum AuditOperation {
   TX_SUCCESS = 'TX_SUCCESS',
   TX_FAILED = 'TX_FAILED',
   TX_RETRYING = 'TX_RETRYING',
+  COMPLIANCE_FREEZE_REQUESTED = 'COMPLIANCE_FREEZE_REQUESTED',
+  COMPLIANCE_CLAWBACK_REQUESTED = 'COMPLIANCE_CLAWBACK_REQUESTED',
+  COMPLIANCE_ACTION_APPROVED = 'COMPLIANCE_ACTION_APPROVED',
+  COMPLIANCE_ACTION_REJECTED = 'COMPLIANCE_ACTION_REJECTED',
+  COMPLIANCE_ACTION_DISPATCHED = 'COMPLIANCE_ACTION_DISPATCHED',
+  COMPLIANCE_ACTION_EXECUTED = 'COMPLIANCE_ACTION_EXECUTED',
+  COMPLIANCE_ACTION_FAILED = 'COMPLIANCE_ACTION_FAILED',
 }
 
 export enum AuditOutcome {
@@ -35,89 +45,27 @@ export interface AuditLogOptions {
   metadata?: any;
 }
 
-/** High-level event category — mirrors the doc comment on the AuditLog model. */
-export enum AuditCategory {
-  WALLET = 'WALLET',
-  TRANSACTION = 'TRANSACTION',
-  AUTH = 'AUTH',
-}
-
-/** Specific operation being recorded. */
-export enum AuditOperation {
-  WALLET_CREATED = 'WALLET_CREATED',
-  WALLET_EXPORTED = 'WALLET_EXPORTED',
-  WALLET_IMPORTED = 'WALLET_IMPORTED',
-  TX_SUBMITTED = 'TX_SUBMITTED',
-  TX_SUCCESS = 'TX_SUCCESS',
-  TX_FAILED = 'TX_FAILED',
-  TX_RETRYING = 'TX_RETRYING',
-  TX_BLOCKED = 'TX_BLOCKED',
-  TX_PENDING_REVIEW = 'TX_PENDING_REVIEW',
-  REGISTER = 'REGISTER',
-  LOGIN = 'LOGIN',
-  LOGIN_FAILED = 'LOGIN_FAILED',
-}
-
-/** Outcome of the operation. */
-export enum AuditOutcome {
-  SUCCESS = 'SUCCESS',
-  FAILURE = 'FAILURE',
-}
-
-export interface AuditLogEntry {
-  userId?: string | null;
-  category: AuditCategory | string;
-  operation: AuditOperation | string;
-  outcome: AuditOutcome | string;
-  walletPublicKey?: string;
-  amount?: string;
-  assetCode?: string;
-  destination?: string;
-  txHash?: string;
-  metadata?: Record<string, any>;
-}
-
-export interface AuditLogQuery {
-  userId?: string;
-  category?: string;
-  operation?: string;
-  from?: Date;
-  to?: Date;
-  limit?: number;
-  offset?: number;
-}
-
-const DEFAULT_QUERY_LIMIT = 50;
-const MAX_QUERY_LIMIT = 200;
-const EXPORT_PAGE_SIZE = 500;
-
-function buildWhere(filters: Pick<AuditLogQuery, 'userId' | 'category' | 'operation' | 'from' | 'to'>) {
-  const where: Record<string, any> = {};
-  if (filters.userId) where.userId = filters.userId;
-  if (filters.category) where.category = filters.category;
-  if (filters.operation) where.operation = filters.operation;
-  if (filters.from || filters.to) {
-    where.createdAt = {
-      ...(filters.from ? { gte: filters.from } : {}),
-      ...(filters.to ? { lte: filters.to } : {}),
-    };
-  }
-  return where;
-}
-
 /**
- * Append-only audit trail for security-relevant events (wallet, transaction,
- * auth). Rows are never mutated once written — enforced in the app by only
- * exposing `log`/`query`/`exportNdjson` here, and at the database level by a
- * trigger (see prisma/migrations/*_audit_log_immutable_trigger).
+ * Append-only, tamper-evident audit log.
+ *
+ * Every entry participates in a SHA-256 hash chain:
+ *   - `previousHash` points at the hash of the immediately preceding entry,
+ *   - `hash` is computed over the entry's canonical payload + `previousHash`.
+ *
+ * Retroactively modifying or deleting any row breaks every subsequent hash,
+ * which makes the log tamper-evident for compliance review.
  */
 @Injectable()
 export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Record an audit event. Never throws — a failure to write the audit trail
-   * must not break the operation being audited.
+   * Log an audit event to the database (append-only). Accepts either a
+   * structured options object or the legacy positional form:
+   * `log(userId, action, metadata)`.
+   *
+   * Failures are swallowed (fire-and-forget) so audit issues never break the
+   * main flow.
    */
   async log(
     userIdOrOptions: string | null | AuditLogOptions,
@@ -128,9 +76,20 @@ export class AuditService {
     _correlationId?: string,
   ): Promise<void> {
     try {
+      // Link to the most recent sealed entry. Under extreme concurrency two
+      // writers may share a parent; the chain remains tamper-evident (a fork
+      // is still detectable), and strict linearisation can be layered on top
+      // with a row lock if it ever becomes necessary.
+      const previous = await this.prisma.auditLog.findFirst({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { hash: true },
+      });
+      const previousHash = previous?.hash ?? null;
+
+      let created;
       if (typeof userIdOrOptions === 'object' && userIdOrOptions !== null) {
         const opts = userIdOrOptions;
-        await this.prisma.auditLog.create({
+        created = await this.prisma.auditLog.create({
           data: {
             userId: opts.userId ?? null,
             category: opts.category ?? 'GENERAL',
@@ -142,20 +101,44 @@ export class AuditService {
             destination: opts.destination ?? null,
             txHash: opts.txHash ?? null,
             metadata: opts.metadata ?? null,
+            previousHash,
           },
         });
       } else {
-        const userId: string | null = typeof userIdOrOptions === 'string' ? userIdOrOptions : null;
-        await this.prisma.auditLog.create({
+        const userId: string | null =
+          typeof userIdOrOptions === 'string' ? userIdOrOptions : null;
+        created = await this.prisma.auditLog.create({
           data: {
             userId,
             category: 'GENERAL',
             operation: action ?? 'ACTION',
             outcome: 'SUCCESS',
             metadata: metadata ?? null,
+            previousHash,
           },
         });
       }
+
+      const hash = this.hashEntry({
+        id: created.id,
+        userId: created.userId,
+        category: created.category,
+        operation: created.operation,
+        outcome: created.outcome,
+        walletPublicKey: created.walletPublicKey,
+        amount: created.amount,
+        assetCode: created.assetCode,
+        destination: created.destination,
+        txHash: created.txHash,
+        metadata: created.metadata,
+        previousHash,
+        createdAt: created.createdAt,
+      });
+
+      await this.prisma.auditLog.update({
+        where: { id: created.id },
+        data: { hash },
+      });
     } catch {
       // Don't let audit failures break the main flow
     }
@@ -223,7 +206,7 @@ export class AuditService {
   async getRecentAuditLogs(days: number = 7): Promise<any[]> {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - days);
-    
+
     return this.prisma.auditLog.findMany({
       where: {
         createdAt: {
@@ -233,6 +216,44 @@ export class AuditService {
       orderBy: { createdAt: 'desc' },
       take: 1000,
     });
+  }
+
+  /**
+   * SHA-256 over the canonical entry payload, including `previousHash` and the
+   * row id + createdAt, so every entry is cryptographically bound to its
+   * predecessor and its own identity.
+   */
+  private hashEntry(entry: {
+    id: string;
+    userId: string | null;
+    category: string;
+    operation: string;
+    outcome: string;
+    walletPublicKey: string | null;
+    amount: string | null;
+    assetCode: string | null;
+    destination: string | null;
+    txHash: string | null;
+    metadata: unknown;
+    previousHash: string | null;
+    createdAt: Date;
+  }): string {
+    const canonical = JSON.stringify({
+      id: entry.id,
+      userId: entry.userId,
+      category: entry.category,
+      operation: entry.operation,
+      outcome: entry.outcome,
+      walletPublicKey: entry.walletPublicKey,
+      amount: entry.amount,
+      assetCode: entry.assetCode,
+      destination: entry.destination,
+      txHash: entry.txHash,
+      metadata: entry.metadata ?? null,
+      previousHash: entry.previousHash,
+      createdAt: entry.createdAt.toISOString(),
+    });
+    return createHash('sha256').update(canonical).digest('hex');
   }
 }
 
