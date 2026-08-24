@@ -1,4 +1,63 @@
-use thiserror::Error;
+use std::env;
+use stellar_sdk::{
+    types::{AccountId, Asset, Memo, MemoText, Operation, Transaction},
+    HorizonClient, Keypair, Network,
+};
+
+pub struct StellarService {
+    horizon_client: HorizonClient,
+    network: Network,
+}
+
+#[derive(Debug)]
+pub struct SigningConfig {
+    pub requires_cosign: bool,
+    pub user_keypair: Keypair,
+    pub cosigner_keypair: Option<Keypair>,
+}
+
+impl StellarService {
+    pub fn new() -> Self {
+        let horizon_url = env::var("HORIZON_URL")
+            .unwrap_or_else(|_| "https://horizon-testnet.stellar.org".to_string());
+        let network = if env::var("STELLAR_NETWORK").unwrap_or_default() == "mainnet" {
+            Network::Public
+        } else {
+            Network::Testnet
+        };
+
+        StellarService {
+            horizon_client: HorizonClient::new(horizon_url),
+            network,
+        }
+    }
+
+    /// Build a transaction with optional multi-signature
+    pub async fn build_transaction(
+        &self,
+        source_account: &str,
+        destination: &str,
+        amount: &str,
+        asset_code: &str,
+        asset_issuer: &str,
+        memo: Option<&str>,
+        config: &SigningConfig,
+    ) -> Result<Transaction, Box<dyn std::error::Error>> {
+        let source_account = self.horizon_client.load_account(source_account).await?;
+
+        let asset = if asset_code == "XLM" {
+            Asset::native()
+        } else {
+            Asset::new(asset_code, asset_issuer)?
+        };
+
+        let mut transaction = Transaction::builder(&source_account)
+            .operation(Operation::Payment {
+                destination: AccountId::from_string(destination)?,
+                asset,
+                amount: amount.parse()?,
+            })
+            .network(self.network);
 
 /// Stroops charged per operation for a simple payment transaction.
 const BASE_FEE_STROOPS: u32 = 100;

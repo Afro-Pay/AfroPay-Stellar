@@ -81,3 +81,19 @@ flowchart TB
 - The transaction service prepares payment intent and simulation data.
 - The Rust worker performs Horizon/Soroban calls, including path payments, anchor-driven flows, and future contract interactions.
 - Anchor flows are exposed through the API but settle through Stellar-compatible rails.
+
+## Architecture Decision Records
+
+AfroPay-Stellar's foundational design choices are documented as Architecture Decision Records (ADRs) in the [`docs/adr/`](./adr/) directory. Each ADR explains the "why" behind major decisions:
+
+- **[ADR 0001: BullMQ for Asynchronous Settlement](./adr/0001-bullmq-async-settlement.md)** — Why we queue transfers in BullMQ instead of synchronously calling Stellar. Enables fast API responses and reliable retry logic.
+
+- **[ADR 0002: AES-256-GCM Envelope Encryption](./adr/0002-aes256-gcm-envelope-encryption.md)** — Why we use hybrid envelope encryption for wallet secrets instead of pure KMS. Balances performance, availability, and security.
+
+- **[ADR 0003: Python for Fraud Scoring](./adr/0003-python-fraud-scoring.md)** — Why fraud detection runs in Python rather than Rust or TypeScript. Prioritizes data science flexibility and ecosystem maturity.
+
+- **[ADR 0004: Soroban Escrow Over SEP-8 Regulated Assets](./adr/0004-soroban-escrow-over-sep8.md)** — Why we implement settlement via Soroban smart contracts. Provides trustless, atomic settlement without issuer dependency.
+
+- **[ADR 0005: Deterministic Keypair Derivation](./adr/0005-deterministic-keypair-derivation.md)** — Why the worker derives keys deterministically from a master seed. Ensures recovery and eliminates key-storage risk.
+
+See the [ADR README](./adr/README.md) for details on how to propose new ADRs.

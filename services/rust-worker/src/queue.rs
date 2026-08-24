@@ -1,8 +1,5 @@
 use anyhow::Result;
 use redis::AsyncCommands;
-use std::sync::Arc;
-use std::time::Instant;
-use tokio::sync::Semaphore;
 use tracing::{error, info};
 use crate::metrics::{QUEUE_DEPTH, TX_LATENCY_MS, TX_SUCCESS_TOTAL, TX_FAILURE_TOTAL};
 use crate::lock_manager::LockManager;
@@ -12,34 +9,14 @@ pub async fn listen() -> Result<()> {
     let client = redis::Client::open(redis_url)?;
     let lock_manager = LockManager::new(client.clone());
 
-    let horizon_url = Arc::new(
-        std::env::var("HORIZON_URL")
-            .unwrap_or_else(|_| "https://horizon-testnet.stellar.org".to_string()),
-    );
-    let network_passphrase =
-        if std::env::var("STELLAR_NETWORK").unwrap_or_default() == "mainnet" {
-            PUBLIC_PASSPHRASE
-        } else {
-            TESTNET_PASSPHRASE
-        };
-    let source_secret = Arc::new(
-        std::env::var("USER_SECRET_KEY").expect("USER_SECRET_KEY must be set"),
-    );
-    let http_client = reqwest::Client::new();
+        info!("Connected to Redis queue: stellar_jobs");
 
-    info!("Listening on Redis queue: stellar_jobs");
+        Ok(Self { client })
+    }
 
-    let concurrency: usize = std::env::var("WORKER_CONCURRENCY")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(10);
+    pub async fn receive_job(&self) -> Result<Option<TransactionJob>> {
+        let mut conn = self.client.get_async_connection().await?;
 
-    let semaphore = Arc::new(Semaphore::new(concurrency));
-
-    loop {
-        // Use a short timeout so we can periodically update queue depth
-        let mut conn = client.get_async_connection().await?;
-        // Update queue depth gauge
         match conn.llen::<_, i64>("stellar_jobs").await {
             Ok(len) => QUEUE_DEPTH.set(len),
             Err(e) => error!("Failed to fetch queue length: {}", e),
@@ -98,8 +75,9 @@ pub async fn listen() -> Result<()> {
                         drop(permit);
                     });
                 }
-                Err(e) => error!("Failed to parse job: {}", e),
             }
+        } else {
+            Ok(None)
         }
     }
 }
