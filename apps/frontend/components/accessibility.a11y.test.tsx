@@ -44,6 +44,40 @@ describe('TransactionList accessibility', () => {
     expect(screen.getByRole('columnheader', { name: 'Status' })).toBeTruthy();
     await expectNoSeriousAxeViolations(container);
   });
+
+  test('expands a row to reveal transaction hash, copy button, and explorer link', async () => {
+    const { container } = render(
+      createElement(TransactionList, {
+        transactions: [{
+          id: 'tx-1',
+          destination: 'GDESTINATION',
+          amount: '25',
+          assetCode: 'USDC',
+          status: 'SUCCESS',
+          createdAt: '2026-08-19T12:00:00.000Z',
+          stellarTxHash: 'abc123def456',
+        }],
+      }),
+    );
+
+    // No hash visible before expanding.
+    expect(screen.queryByText('abc123def456')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /expand details/i }));
+
+    expect(screen.getByText('abc123def456')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Copy Stellar transaction hash' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'View transaction on Stellar Expert' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: /view transaction/i }).getAttribute('href')).toContain(
+      'stellar.expert/explorer/public/tx/abc123def456',
+    );
+    await expectNoSeriousAxeViolations(container);
+
+    // Collapsing hides the details again.
+    fireEvent.click(screen.getByRole('button', { name: /collapse details/i }));
+    expect(screen.queryByText('abc123def456')).toBeNull();
+    await expectNoSeriousAxeViolations(container);
+  });
 });
 
 describe('AssetPicker accessibility', () => {
