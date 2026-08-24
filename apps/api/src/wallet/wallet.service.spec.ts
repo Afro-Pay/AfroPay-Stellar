@@ -69,6 +69,7 @@ describe("WalletService reconciliation", () => {
     prisma = {
       wallet: {
         findUnique: jest.fn().mockResolvedValue(wallet),
+        findFirst: jest.fn().mockResolvedValue(wallet),
       },
       transaction: {
         findMany: jest.fn().mockResolvedValue([]),
