@@ -7,6 +7,7 @@ import { TransactionModule } from './transaction/transaction.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { LoggerModule } from 'nestjs-pino';
 import { AdminModule } from './admin/admin.module';
+import { SorobanModule } from './soroban/soroban.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { AdminModule } from './admin/admin.module';
     WalletModule,
     TransactionModule,
     AdminModule,
+    SorobanModule,
   ],
   controllers: [],
   providers: [],
