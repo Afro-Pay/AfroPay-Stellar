@@ -15,42 +15,45 @@ use lock_manager::LockManager;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
-    
-    println!("🚀 Starting Rust Worker with Multi-Signature Support");
-    
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    info!("Starting Rust Worker with Horizon SSE Streaming");
+
+    db::validate_env();
+
     let stellar_service = StellarService::new();
     let queue_service = QueueService::new().await?;
-    
-    // Load cosigner keypair (if configured)
-    let cosigner_keypair = if let Ok(cosigner_secret) = env::var("COSIGNER_SECRET") {
-        println!("✅ Cosigner keypair loaded from environment");
-        Some(Keypair::from_secret(&cosigner_secret)?)
-    } else {
-        println!("ℹ️ No cosigner key configured - multi-sig disabled");
-        None
-    };
-    
-    let threshold_usd = env::var("MULTISIG_THRESHOLD_USD")
-        .unwrap_or_else(|_| "10000".to_string())
-        .parse::<f64>()
-        .unwrap_or(10000.0);
-    
-    println!("📊 Multi-sig threshold: ${} USD", threshold_usd);
-    
-    // Process transactions from queue
+    let db_pool = db::create_pool().await?;
+
+    // Start Horizon SSE listener in background
+    let sse_db_pool = db_pool.clone();
+    tokio::spawn(async move {
+        if let Err(e) = sse::start_transaction_listener(sse_db_pool).await {
+            tracing::error!("SSE listener terminated with error: {}", e);
+        }
+    });
+
+    info!("Worker started. Processing transactions from queue...");
+
     loop {
         match queue_service.receive_job().await {
             Ok(Some(job)) => {
-                println!("📋 Processing job: {}", job.id);
-                if let Err(e) = process_job(&stellar_service, job, &cosigner_keypair, threshold_usd).await {
-                    eprintln!("❌ Job failed: {}", e);
+                info!("Processing job: {}", job.id);
+                if let Err(e) = process_job(&stellar_service, job, &db_pool).await {
+                    tracing::error!("Job failed: {}", e);
                 }
             }
             Ok(None) => {
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             }
             Err(e) => {
-                eprintln!("❌ Queue error: {}", e);
+                tracing::error!("Queue error: {}", e);
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
         }
@@ -60,8 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn process_job(
     stellar_service: &StellarService,
     job: TransactionJob,
-    cosigner_keypair: &Option<Keypair>,
-    threshold_usd: f64,
+    db_pool: &Arc<sqlx::PgPool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
     let lock_manager = LockManager::new(Client::open(redis_url)?);
@@ -72,18 +74,25 @@ async fn process_job(
     // Load user's keypair (in production, securely retrieve from vault)
     let user_secret = env::var("USER_SECRET_KEY")
         .expect("USER_SECRET_KEY must be set");
-    let user_keypair = Keypair::from_secret(&user_secret)?;
-    
-    // Determine if cosign is required
+    let user_keypair = stellar_sdk::Keypair::from_secret(&user_secret)?;
+
+    let cosigner_keypair = if let Ok(cosigner_secret) = env::var("COSIGNER_SECRET") {
+        Some(stellar_sdk::Keypair::from_secret(&cosigner_secret)?)
+    } else {
+        None
+    };
+
     let requires_cosign = job.requires_cosign;
-    
+
     let config = stellar::SigningConfig {
         requires_cosign,
         user_keypair,
-        cosigner_keypair: cosigner_keypair.clone(),
+        cosigner_keypair,
     };
-    
-    // Build and sign transaction
+
+    // Update status to submitting
+    db::update_transaction_status(db_pool, &job.id, "submitting").await?;
+
     let transaction = stellar_service.build_transaction(
         &job.source_wallet,
         &job.destination_wallet,
@@ -93,8 +102,7 @@ async fn process_job(
         job.memo.as_deref(),
         &config,
     ).await?;
-    
-    // Submit to network
+
     let hash = stellar_service.submit_transaction(&transaction).await?;
     
     println!("✅ Transaction submitted successfully!");

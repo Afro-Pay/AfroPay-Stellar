@@ -1,8 +1,5 @@
 use anyhow::Result;
 use redis::AsyncCommands;
-use std::sync::Arc;
-use std::time::Instant;
-use tokio::sync::Semaphore;
 use tracing::{error, info};
 use crate::models::TransactionJob;
 use crate::stellar::submit_transaction;
@@ -14,19 +11,14 @@ pub async fn listen() -> Result<()> {
     let client = redis::Client::open(redis_url)?;
     let lock_manager = LockManager::new(client.clone());
 
-    info!("Listening on Redis queue: stellar_jobs");
+        info!("Connected to Redis queue: stellar_jobs");
 
-    let concurrency: usize = std::env::var("WORKER_CONCURRENCY")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(10);
+        Ok(Self { client })
+    }
 
-    let semaphore = Arc::new(Semaphore::new(concurrency));
+    pub async fn receive_job(&self) -> Result<Option<TransactionJob>> {
+        let mut conn = self.client.get_async_connection().await?;
 
-    loop {
-        // Use a short timeout so we can periodically update queue depth
-        let mut conn = client.get_async_connection().await?;
-        // Update queue depth gauge
         match conn.llen::<_, i64>("stellar_jobs").await {
             Ok(len) => QUEUE_DEPTH.set(len),
             Err(e) => error!("Failed to fetch queue length: {}", e),
@@ -84,8 +76,9 @@ pub async fn listen() -> Result<()> {
                         drop(permit);
                     });
                 }
-                Err(e) => error!("Failed to parse job: {}", e),
             }
+        } else {
+            Ok(None)
         }
     }
 }
