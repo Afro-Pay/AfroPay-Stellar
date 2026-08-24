@@ -37,6 +37,30 @@ enum UserRole {
   ADMIN
 }
 
+/// Compliance action kinds supported on regulated corridors.
+enum ComplianceActionType {
+  /// Freeze a target's trustline via SetTrustLineFlags (clears AUTHORIZED_FLAG).
+  FREEZE
+  /// Claw back illicit funds from a target account back to the issuer treasury.
+  CLAWBACK
+}
+
+/// Lifecycle states for a compliance action.
+enum ComplianceActionStatus {
+  /// Created by one officer; awaiting a second officer's approval.
+  PENDING_APPROVAL
+  /// Approved by the required number of distinct compliance officers.
+  APPROVED
+  /// Dispatched to the Rust worker for on-chain execution.
+  EXECUTING
+  /// Executed on-chain; txHash populated.
+  EXECUTED
+  /// Execution failed on-chain or the worker reported a failure.
+  FAILED
+  /// Rejected by an officer before reaching the approval threshold.
+  REJECTED
+}
+
 model User {
   id           String        @id @default(uuid())
   email        String        @unique
@@ -59,6 +83,56 @@ model AnonymizationTombstone {
   erasedAt            DateTime @default(now())
 
   @@index([erasedAt])
+}
+
+/// A compliance action (freeze or clawback) initiated by an admin officer on a
+/// regulated corridor. Requires at least two distinct officers to approve
+/// before the action is dispatched to the Rust worker for on-chain execution.
+model ComplianceAction {
+  id            String                 @id @default(uuid())
+  type          ComplianceActionType
+  status        ComplianceActionStatus @default(PENDING_APPROVAL)
+  /// Stellar public key of the account being frozen or clawed back.
+  targetAccount String
+  /// Asset code involved (e.g. "USDC", "NGN").
+  assetCode     String
+  /// Asset issuer public key; null for native XLM.
+  assetIssuer   String?
+  /// Amount to claw back (string to preserve decimal precision). Null for freeze actions.
+  amount        String?
+  /// Free-text justification recorded for the audit trail.
+  reason        String?
+  /// Compliance officer (admin user) who initiated the action — also the first approver.
+  requestedBy   String
+  /// Stellar transaction hash once executed on-chain.
+  txHash        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  approvals ComplianceApproval[]
+
+  @@index([status])
+  @@index([targetAccount])
+  @@index([requestedBy])
+  @@index([createdAt])
+}
+
+/// A single officer's approval of a compliance action, carrying a SHA-256
+/// signature over the canonical action payload. At most one approval per
+/// officer per action (enforced by @@unique([actionId, officerId])).
+model ComplianceApproval {
+  id         String   @id @default(uuid())
+  actionId   String
+  /// Compliance officer (admin user) who approved.
+  officerId  String
+  /// SHA-256 signature binding the officer to the action payload.
+  signature  String
+  approvedAt DateTime @default(now())
+
+  action ComplianceAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+
+  @@unique([actionId, officerId])
+  @@index([actionId])
 }
 
 model Wallet {
@@ -145,14 +219,18 @@ model KycRecord {
 
 /// Structured audit log entry capturing security-relevant events.
 /// Each row is immutable by convention — never UPDATE or DELETE audit rows.
+/// Rows form a tamper-evident SHA-256 hash chain: every entry stores the hash
+/// of the previous entry (`previousHash`) plus its own `hash`, so retroactive
+/// modification of any row breaks the chain.
 model AuditLog {
   id            String   @id @default(uuid())
   /// The authenticated user who triggered the event (nullable for system events).
   userId        String?
-  /// High-level event category: WALLET | TRANSACTION | AUTH
+  /// High-level event category: WALLET | TRANSACTION | AUTH | COMPLIANCE | KYC
   category      String
   /// Specific operation: WALLET_CREATED | WALLET_EXPORTED | WALLET_IMPORTED |
-  ///   TX_SUBMITTED | TX_SUCCESS | TX_FAILED | TX_RETRYING
+  ///   TX_SUBMITTED | TX_SUCCESS | TX_FAILED | TX_RETRYING |
+  ///   COMPLIANCE_FREEZE_REQUESTED | COMPLIANCE_CLAWBACK_REQUESTED | …
   operation     String
   /// Outcome of the operation: SUCCESS | FAILURE
   outcome       String
@@ -168,6 +246,10 @@ model AuditLog {
   txHash        String?
   /// Additional freeform context serialised as JSON.
   metadata      Json?
+  /// SHA-256 (hex) of the immediately preceding audit entry, forming the hash chain.
+  previousHash  String?
+  /// SHA-256 (hex) over this entry's canonical payload + previousHash.
+  hash          String?
   /// ISO-8601 timestamp — indexed for time-range queries during reviews.
   createdAt     DateTime @default(now())
 
@@ -175,4 +257,5 @@ model AuditLog {
   @@index([category])
   @@index([operation])
   @@index([createdAt])
+  @@index([previousHash])
 }

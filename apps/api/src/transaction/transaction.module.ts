@@ -14,6 +14,10 @@ import { AuthModule } from '../auth/auth.module';
 import { KycModule } from '../kyc/kyc.module';
 import { AnchorModule } from '../anchor/anchor.module';
 import { AuditModule } from '../audit/audit.module';
+import {
+  TRANSACTION_DLQ_QUEUE_NAME,
+  TRANSACTION_QUEUE_NAME,
+} from './transaction-retry.config';
 
 @Module({
   imports: [

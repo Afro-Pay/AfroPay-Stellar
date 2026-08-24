@@ -1,103 +1,221 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { createHash } from 'crypto';
+import { Injectable } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { Logger } from 'nestjs-pino';
 
+export const AuditCategory = {
+  WALLET: 'WALLET',
+  TRANSACTION: 'TRANSACTION',
+  AUTH: 'AUTH',
+  COMPLIANCE: 'COMPLIANCE',
+  KYC: 'KYC',
+} as const;
+
+export const AuditOperation = {
+  WALLET_CREATED: 'WALLET_CREATED',
+  WALLET_EXPORTED: 'WALLET_EXPORTED',
+  WALLET_IMPORTED: 'WALLET_IMPORTED',
+  TX_SUBMITTED: 'TX_SUBMITTED',
+  TX_SUCCESS: 'TX_SUCCESS',
+  TX_FAILED: 'TX_FAILED',
+  TX_RETRYING: 'TX_RETRYING',
+  COMPLIANCE_FREEZE_REQUESTED: 'COMPLIANCE_FREEZE_REQUESTED',
+  COMPLIANCE_CLAWBACK_REQUESTED: 'COMPLIANCE_CLAWBACK_REQUESTED',
+  COMPLIANCE_ACTION_APPROVED: 'COMPLIANCE_ACTION_APPROVED',
+  COMPLIANCE_ACTION_REJECTED: 'COMPLIANCE_ACTION_REJECTED',
+  COMPLIANCE_ACTION_DISPATCHED: 'COMPLIANCE_ACTION_DISPATCHED',
+  COMPLIANCE_ACTION_EXECUTED: 'COMPLIANCE_ACTION_EXECUTED',
+  COMPLIANCE_ACTION_FAILED: 'COMPLIANCE_ACTION_FAILED',
+} as const;
+
+export const AuditOutcome = {
+  SUCCESS: 'SUCCESS',
+  FAILURE: 'FAILURE',
+} as const;
+
+export interface AuditLogInput {
+  userId?: string | null;
+  category: string;
+  operation: string;
+  outcome: string;
+  walletPublicKey?: string | null;
+  amount?: string | null;
+  assetCode?: string | null;
+  destination?: string | null;
+  txHash?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface AuditLogQuery {
+  userId?: string;
+  category?: string;
+  operation?: string;
+  from?: Date;
+  to?: Date;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Append-only, tamper-evident audit log.
+ *
+ * Every entry participates in a SHA-256 hash chain:
+ *   - `previousHash` points at the hash of the immediately preceding entry,
+ *   - `hash` is computed over the entry's canonical payload + `previousHash`.
+ *
+ * Retroactively modifying or deleting any row breaks every subsequent hash,
+ * which makes the log tamper-evident for compliance review.
+ */
 @Injectable()
-export class AuditService {
+export class AuditLogService {
   constructor(
     private prisma: PrismaClient,
     private logger: Logger,
   ) {}
 
   /**
-   * Log an audit event to the database (append-only)
+   * Append a log entry and seal it into the hash chain.
+   *
+   * Failures are swallowed (fire-and-forget) so audit issues never break the
+   * main flow — the error is surfaced through the structured logger instead.
    */
-  async log(
-    userId: string | null,
-    action: string,
-    metadata: Record<string, any>,
-    ipAddress?: string,
-    userAgent?: string,
-    correlationId?: string,
-  ): Promise<void> {
+  async log(input: AuditLogInput): Promise<void> {
     try {
-      // Write to audit_logs table (append-only)
-      await this.prisma.auditLog.create({
+      // Link to the most recent sealed entry. Under extreme concurrency two
+      // writers may share a parent; the chain remains tamper-evident (a fork
+      // is still detectable), and strict linearisation can be layered on top
+      // with a row lock if it ever becomes necessary.
+      const previous = await this.prisma.auditLog.findFirst({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { hash: true },
+      });
+      const previousHash = previous?.hash ?? null;
+
+      const created = await this.prisma.auditLog.create({
         data: {
-          userId,
-          action,
-          metadata,
-          ipAddress,
-          userAgent,
-          correlationId: correlationId || 'unknown',
+          userId: input.userId ?? null,
+          category: input.category,
+          operation: input.operation,
+          outcome: input.outcome,
+          walletPublicKey: input.walletPublicKey ?? null,
+          amount: input.amount ?? null,
+          assetCode: input.assetCode ?? null,
+          destination: input.destination ?? null,
+          txHash: input.txHash ?? null,
+          metadata: (input.metadata ?? null) as any,
+          previousHash,
         },
       });
 
-      // Also log to structured log
-      this.logger.info({
+      const hash = this.hashEntry({
+        id: created.id,
+        userId: created.userId,
+        category: created.category,
+        operation: created.operation,
+        outcome: created.outcome,
+        walletPublicKey: created.walletPublicKey,
+        amount: created.amount,
+        assetCode: created.assetCode,
+        destination: created.destination,
+        txHash: created.txHash,
+        metadata: created.metadata,
+        previousHash,
+        createdAt: created.createdAt,
+      });
+
+      await this.prisma.auditLog.update({
+        where: { id: created.id },
+        data: { hash },
+      });
+
+      this.logger.log({
         event: 'audit',
-        action,
-        userId,
-        metadata,
-        ipAddress,
-        correlationId,
+        operation: input.operation,
+        userId: input.userId,
+        category: input.category,
+        hash,
+        previousHash,
       });
     } catch (error) {
-      // Don't let audit failures break the main flow
       this.logger.error({
         event: 'audit_failed',
-        error: error.message,
-        action,
-        userId,
+        error: (error as Error).message,
+        operation: input.operation,
+        userId: input.userId,
       });
     }
   }
 
   /**
-   * Get audit history for a user (read-only)
+   * Query the audit log with optional filters and pagination.
+   * Read-only — audit rows are never updated or deleted by this service.
    */
-  async getUserAuditLogs(userId: string, limit: number = 100): Promise<any[]> {
-    return this.prisma.auditLog.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-    });
+  async query(filters: AuditLogQuery = {}): Promise<{ total: number; entries: any[] }> {
+    const limit = Math.min(200, Math.max(1, filters.limit ?? 50));
+    const offset = Math.max(0, filters.offset ?? 0);
+
+    const where: Record<string, unknown> = {
+      ...(filters.userId ? { userId: filters.userId } : {}),
+      ...(filters.category ? { category: filters.category } : {}),
+      ...(filters.operation ? { operation: filters.operation } : {}),
+      ...(filters.from || filters.to
+        ? {
+            createdAt: {
+              ...(filters.from ? { gte: filters.from } : {}),
+              ...(filters.to ? { lte: filters.to } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const [total, entries] = await Promise.all([
+      this.prisma.auditLog.count({ where }),
+      this.prisma.auditLog.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit,
+        skip: offset,
+      }),
+    ]);
+
+    return { total, entries };
   }
 
   /**
-   * Get audit history for a specific action
+   * SHA-256 over the canonical entry payload, including `previousHash` and the
+   * row id + createdAt, so every entry is cryptographically bound to its
+   * predecessor and its own identity.
    */
-  async getActionAuditLogs(action: string, limit: number = 100): Promise<any[]> {
-    return this.prisma.auditLog.findMany({
-      where: { action },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
+  private hashEntry(entry: {
+    id: string;
+    userId: string | null;
+    category: string;
+    operation: string;
+    outcome: string;
+    walletPublicKey: string | null;
+    amount: string | null;
+    assetCode: string | null;
+    destination: string | null;
+    txHash: string | null;
+    metadata: unknown;
+    previousHash: string | null;
+    createdAt: Date;
+  }): string {
+    const canonical = JSON.stringify({
+      id: entry.id,
+      userId: entry.userId,
+      category: entry.category,
+      operation: entry.operation,
+      outcome: entry.outcome,
+      walletPublicKey: entry.walletPublicKey,
+      amount: entry.amount,
+      assetCode: entry.assetCode,
+      destination: entry.destination,
+      txHash: entry.txHash,
+      metadata: entry.metadata ?? null,
+      previousHash: entry.previousHash,
+      createdAt: entry.createdAt.toISOString(),
     });
-  }
-
-  /**
-   * Get recent audit logs (admin use)
-   */
-  async getRecentAuditLogs(days: number = 7): Promise<any[]> {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    
-    return this.prisma.auditLog.findMany({
-      where: {
-        createdAt: {
-          gte: cutoff,
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 1000,
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-          },
-        },
-      },
-    });
+    return createHash('sha256').update(canonical).digest('hex');
   }
 }

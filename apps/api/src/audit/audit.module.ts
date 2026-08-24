@@ -1,5 +1,5 @@
 import { Module, Global } from '@nestjs/common';
-import { AuditService } from './audit.service';
+import { AuditLogService } from './audit.service';
 import { PrismaClient } from '@prisma/client';
 import { LoggerModule } from 'nestjs-pino';
 
@@ -19,7 +19,7 @@ import { LoggerModule } from 'nestjs-pino';
     }),
   ],
   providers: [
-    AuditService,
+    AuditLogService,
     {
       provide: PrismaClient,
       useFactory: () => {
@@ -31,6 +31,6 @@ import { LoggerModule } from 'nestjs-pino';
       },
     },
   ],
-  exports: [AuditService],
+  exports: [AuditLogService],
 })
 export class AuditModule {}
