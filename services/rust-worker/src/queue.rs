@@ -1,100 +1,64 @@
+//! Redis queue client for the Rust worker.
+//!
+//! The worker BLPOPs two lists:
+//! - `stellar_jobs` — payment jobs pushed by (or for) the NestJS API
+//! - `compliance_jobs` — freeze/clawback jobs pushed by the compliance API
+//!   once the mandatory multi-sig approval threshold is met.
+
 use anyhow::Result;
 use redis::AsyncCommands;
-use tracing::{error, info};
-use crate::metrics::{QUEUE_DEPTH, TX_LATENCY_MS, TX_SUCCESS_TOTAL, TX_FAILURE_TOTAL};
-use crate::lock_manager::LockManager;
+use tracing::info;
 
-pub async fn listen() -> Result<()> {
-    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into());
-    let client = redis::Client::open(redis_url)?;
-    let lock_manager = LockManager::new(client.clone());
+use crate::models::{ComplianceJob, TransactionJob};
 
-        info!("Connected to Redis queue: stellar_jobs");
+/// Redis list consumed by the worker for payment jobs.
+const TRANSACTIONS_QUEUE: &str = "stellar_jobs";
+/// Redis list consumed by the worker for compliance (freeze/clawback) jobs.
+const COMPLIANCE_QUEUE: &str = "compliance_jobs";
 
-        Ok(Self { client })
-    }
-
-    pub async fn receive_job(&self) -> Result<Option<TransactionJob>> {
-        let mut conn = self.client.get_async_connection().await?;
-
-        match conn.llen::<_, i64>("stellar_jobs").await {
-            Ok(len) => set_queue_depth(len),
-            Err(e) => error!("Failed to fetch queue length: {}", e),
-        }
-
-        let result: Option<(String, String)> = conn
-            .blpop("stellar_jobs", 1.0)
-            .await
-            .unwrap_or(None);
-
-        if let Some((_, payload)) = result {
-            match serde_json::from_str::<TransactionJob>(&payload) {
-                Ok(job) => {
-                    let permit = semaphore.clone().acquire_owned().await.unwrap();
-                    info!("Dispatching job: {}", job.id);
-
-                    let lock_manager = lock_manager.clone();
-                    tokio::spawn(async move {
-                        let start = Instant::now();
-                        let lock = match lock_manager.acquire(format!("lock:escrow:{}", job.id)).await {
-                            Ok(lock) => lock,
-                            Err(e) => {
-                                error!("Job {} - lock collision: {}", job.id, e);
-                                drop(permit);
-                                return;
-                            }
-                        };
-                        // Each task creates its own connection for safety
-                        match client_clone.get_async_connection().await {
-                            Ok(mut _task_conn) => {
-                                match submit_transaction(&job).await {
-                                    Ok(hash) => {
-                                        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                                        TX_LATENCY_MS.observe(elapsed_ms);
-                                        TX_SUCCESS_TOTAL.inc();
-                                        info!("Job {} succeeded: {}", job.id, hash);
-                                    }
-                                    Err(e) => {
-                                        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                                        TX_LATENCY_MS.observe(elapsed_ms);
-                                        TX_FAILURE_TOTAL.inc();
-                                        error!("Job {} failed: {}", job.id, e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                                TX_LATENCY_MS.observe(elapsed_ms);
-                                TX_FAILURE_TOTAL.inc();
-                                error!("Job {} - failed to get task connection: {}", job.id, e);
-                            }
-                        }
-                        if let Err(e) = lock.release().await {
-                            error!("Job {} - lock release failed: {}", job.id, e);
-                        }
-                        drop(permit);
-                    });
-                }
-            }
-        } else {
-            Ok(None)
-        }
-    }
+/// Minimal blocking-pop queue client shared by the payment and compliance
+/// processing loops. Clone is cheap (the underlying `redis::Client` is
+/// reference-counted), so each loop can own its own handle.
+#[derive(Clone)]
+pub struct QueueService {
+    client: redis::Client,
 }
 
-/// Classify a stringified submission error into a stable `error_type` label.
-fn classify_queue_error(msg: &str) -> &'static str {
-    if msg.contains("400") || msg.contains("Bad Request") {
-        "horizon_error"
-    } else if msg.contains("502") || msg.contains("503") || msg.contains("504") {
-        "horizon_error"
-    } else if msg.contains("timeout") || msg.contains("timed out") {
-        "timeout"
-    } else if msg.contains("connection") || msg.contains("connect") {
-        "connection_error"
-    } else if msg.contains("sign") || msg.contains("keypair") {
-        "signing_error"
-    } else {
-        "unknown"
+impl QueueService {
+    pub fn new() -> Result<Self> {
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into());
+        let client = redis::Client::open(redis_url)?;
+        Ok(QueueService { client })
+    }
+
+    /// Blocking-pop a payment job, or return `None` after a short timeout.
+    pub async fn receive_job(&self) -> Result<Option<TransactionJob>> {
+        let mut conn = self.client.get_async_connection().await?;
+        let entry: Option<(String, String)> =
+            conn.blpop(TRANSACTIONS_QUEUE, 1.0).await.unwrap_or(None);
+        match entry {
+            Some((_, payload)) => {
+                let job: TransactionJob = serde_json::from_str(&payload)?;
+                info!("Received payment job: {}", job.id);
+                Ok(Some(job))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Blocking-pop a compliance (freeze/clawback) job, or `None` on timeout.
+    pub async fn receive_compliance_job(&self) -> Result<Option<ComplianceJob>> {
+        let mut conn = self.client.get_async_connection().await?;
+        let entry: Option<(String, String)> =
+            conn.blpop(COMPLIANCE_QUEUE, 1.0).await.unwrap_or(None);
+        match entry {
+            Some((_, payload)) => {
+                let job: ComplianceJob = serde_json::from_str(&payload)?;
+                info!("Received compliance job: {}", job.action_id);
+                Ok(Some(job))
+            }
+            None => Ok(None),
+        }
     }
 }

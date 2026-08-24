@@ -9,7 +9,7 @@ describe('AdminComplianceService', () => {
     name: 'Person Name',
     role: 'USER',
     createdAt: new Date('2025-01-01T00:00:00.000Z'),
-    wallet: { id: 'wallet-1' },
+    wallets: [{ id: 'wallet-1' }],
     kyc: { id: 'kyc-1' },
   };
 

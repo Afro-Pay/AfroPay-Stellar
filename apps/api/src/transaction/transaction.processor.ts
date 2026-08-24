@@ -2,7 +2,7 @@ import { Injectable, Optional } from '@nestjs/common';
 import { Process, Processor } from '@nestjs/bull';
 import { Job } from 'bull';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuditService } from '../audit/audit.service';
+import { AuditCategory, AuditLogService, AuditOutcome } from '../audit/audit.service';
 import { Logger } from 'nestjs-pino';
 import { FraudService } from './fraud.service';
 import { assertTransactionAmountIntegrity } from './transaction-integrity';
@@ -34,7 +34,7 @@ export interface TransactionJobData {
 export class TransactionProcessor {
   constructor(
     private prisma: PrismaService,
-    private auditService: AuditService,
+    private auditService: AuditLogService,
     private logger: Logger,
     private fraudService: FraudService,
     @Optional() private lockService?: RedisLockService,
@@ -104,11 +104,12 @@ export class TransactionProcessor {
     assertTransactionAmountIntegrity(amount, transaction.amount);
 
     // Audit: Transaction initiated
-    await this.auditService.log(userId, 'TRANSACTION_INITIATE', {
-      transactionId: transaction.id,
-      toAddress,
-      amount,
-      assetCode,
+    await this.auditService.log({
+      userId,
+      category: AuditCategory.TRANSACTION,
+      operation: 'TRANSACTION_INITIATE',
+      outcome: AuditOutcome.SUCCESS,
+      metadata: { transactionId: transaction.id, toAddress, amount, assetCode },
     });
 
     this.logger.log({
@@ -144,11 +145,13 @@ export class TransactionProcessor {
         },
       });
 
-      await this.auditService.log(userId, 'TRANSACTION_COMPLETE', {
-        transactionId: transaction.id,
+      await this.auditService.log({
+        userId,
+        category: AuditCategory.TRANSACTION,
+        operation: 'TRANSACTION_COMPLETE',
+        outcome: AuditOutcome.SUCCESS,
         txHash: result.hash,
-        toAddress,
-        amount,
+        metadata: { transactionId: transaction.id, toAddress, amount },
       });
 
       this.logger.log({
@@ -165,11 +168,12 @@ export class TransactionProcessor {
         data: { status: 'FAILED' },
       });
 
-      await this.auditService.log(userId, 'TRANSACTION_FAILED', {
-        transactionId: transaction.id,
-        toAddress,
-        amount,
-        error: error.message,
+      await this.auditService.log({
+        userId,
+        category: AuditCategory.TRANSACTION,
+        operation: 'TRANSACTION_FAILED',
+        outcome: AuditOutcome.FAILURE,
+        metadata: { transactionId: transaction.id, toAddress, amount, error: error.message },
       });
 
       this.logger.error({
@@ -234,10 +238,16 @@ export class TransactionProcessor {
         data: { status: 'FAILED', riskScore: null, flagged: false },
       });
 
-      await this.auditService.log(userId, 'TRANSACTION_FAILED', {
-        transactionId: transaction.id,
-        reason: 'Fraud service unavailable',
-        error: (err as Error).message,
+      await this.auditService.log({
+        userId,
+        category: AuditCategory.TRANSACTION,
+        operation: 'TRANSACTION_FAILED',
+        outcome: AuditOutcome.FAILURE,
+        metadata: {
+          transactionId: transaction.id,
+          reason: 'Fraud service unavailable',
+          error: (err as Error).message,
+        },
       });
 
       return { blocked: true, updatedTx };
@@ -257,11 +267,17 @@ export class TransactionProcessor {
         data: { status: 'FAILED', riskScore, flagged: true },
       });
 
-      await this.auditService.log(userId, 'TRANSACTION_BLOCKED', {
-        transactionId: transaction.id,
-        riskScore,
-        reasons,
-        reason: 'High fraud risk score — transaction blocked',
+      await this.auditService.log({
+        userId,
+        category: AuditCategory.TRANSACTION,
+        operation: 'TRANSACTION_BLOCKED',
+        outcome: AuditOutcome.FAILURE,
+        metadata: {
+          transactionId: transaction.id,
+          riskScore,
+          reasons,
+          reason: 'High fraud risk score — transaction blocked',
+        },
       });
 
       return { blocked: true, updatedTx };
@@ -281,11 +297,17 @@ export class TransactionProcessor {
         data: { status: 'PENDING_REVIEW', riskScore, flagged: true },
       });
 
-      await this.auditService.log(userId, 'TRANSACTION_PENDING_REVIEW', {
-        transactionId: transaction.id,
-        riskScore,
-        reasons,
-        reason: 'Medium fraud risk score — held for manual review',
+      await this.auditService.log({
+        userId,
+        category: AuditCategory.TRANSACTION,
+        operation: 'TRANSACTION_PENDING_REVIEW',
+        outcome: AuditOutcome.SUCCESS,
+        metadata: {
+          transactionId: transaction.id,
+          riskScore,
+          reasons,
+          reason: 'Medium fraud risk score — held for manual review',
+        },
       });
 
       return { blocked: true, updatedTx };
