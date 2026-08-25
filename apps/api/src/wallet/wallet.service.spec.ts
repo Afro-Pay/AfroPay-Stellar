@@ -70,6 +70,7 @@ describe("WalletService reconciliation", () => {
       wallet: {
         findFirst: jest.fn().mockResolvedValue(wallet),
         findUnique: jest.fn().mockResolvedValue(wallet),
+        findFirst: jest.fn().mockResolvedValue(wallet),
       },
       transaction: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -217,6 +218,24 @@ describe("WalletService getBalances polling", () => {
   
   it("mid-retry success", async () => {
     expect(true).toBe(true);
+  });
+});
+
+describe("WalletService Horizon failover", () => {
+  it("loads accounts through the RPC client when available", async () => {
+    const rpcClient = {
+      withHorizonServer: jest.fn(async (operation) =>
+        operation({
+          loadAccount: jest.fn().mockResolvedValue({ sequence: "200", balances: [] }),
+        }),
+      ),
+    };
+    const service = new WalletService(null as any, undefined, rpcClient as any);
+
+    await expect((service as any).loadAccount("GACCOUNT")).resolves.toMatchObject({
+      sequence: "200",
+    });
+    expect(rpcClient.withHorizonServer).toHaveBeenCalledTimes(1);
   });
 });
 

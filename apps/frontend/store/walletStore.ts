@@ -1,5 +1,8 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
 import api, { SimulationResult } from '../lib/api';
+import { readWalletState, writeWalletState } from '../lib/walletCache';
+import type { Balance, Transaction } from '../hooks/useWalletData';
 
 type WalletAction = 'balances' | 'transactions' | 'send';
 
@@ -22,6 +25,10 @@ interface WalletStore {
   isLoadingSend: boolean;
   loading: boolean;
   error: string | null;
+  balances: Balance[];
+  transactions: Transaction[];
+  balancesUpdatedAt: number | null;
+  transactionsUpdatedAt: number | null;
 
   // Wallet management
   setWallets: (wallets: Wallet[]) => void;
@@ -36,6 +43,8 @@ interface WalletStore {
   clearWalletError: () => void;
   setBalancesLoading: (isLoading: boolean) => void;
   setSendLoading: (isLoading: boolean) => void;
+  setCachedBalances: (balances: Balance[]) => void;
+  setCachedTransactions: (transactions: Transaction[]) => void;
 
   // API operations
   sendTransfer: (data: {
@@ -59,7 +68,16 @@ interface WalletStore {
   fetchPublicKey: () => Promise<void>;
 }
 
-export const useWalletStore = create<WalletStore>((set, get) => ({
+const indexedDbStorage: StateStorage = {
+  getItem: async () => {
+    const state = await readWalletState();
+    return state ? JSON.stringify(state) : null;
+  },
+  setItem: async (_name, value) => writeWalletState(JSON.parse(value)),
+  removeItem: async () => undefined,
+};
+
+export const useWalletStore = create<WalletStore>()(persist((set, get) => ({
   wallets: [],
   activeWalletId: null,
   publicKey: null,
@@ -70,6 +88,10 @@ export const useWalletStore = create<WalletStore>((set, get) => ({
   isLoadingSend: false,
   loading: false,
   error: null,
+  balances: [],
+  transactions: [],
+  balancesUpdatedAt: null,
+  transactionsUpdatedAt: null,
 
   // Wallet management
   setWallets: (wallets) => set({ wallets }),
@@ -103,6 +125,8 @@ export const useWalletStore = create<WalletStore>((set, get) => ({
   clearWalletError: () => set({ error: null }),
   setBalancesLoading: (isLoading) => set({ isLoadingBalances: isLoading }),
   setSendLoading: (isLoading) => set({ isLoadingSend: isLoading }),
+  setCachedBalances: (balances) => set({ balances, balancesUpdatedAt: Date.now() }),
+  setCachedTransactions: (transactions) => set({ transactions: transactions.slice(0, 50), transactionsUpdatedAt: Date.now() }),
 
   // API operations
   sendTransfer: async (payload) => {
@@ -246,5 +270,14 @@ export const useWalletStore = create<WalletStore>((set, get) => ({
       }
     }
   },
+}), {
+  name: 'wallet-state',
+  storage: createJSONStorage(() => indexedDbStorage),
+  partialize: (state) => ({
+    balances: state.balances,
+    transactions: state.transactions.slice(0, 50),
+    balancesUpdatedAt: state.balancesUpdatedAt,
+    transactionsUpdatedAt: state.transactionsUpdatedAt,
+  }),
 }));
 

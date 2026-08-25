@@ -8,6 +8,7 @@ import TransactionList from '../components/TransactionList';
 import SkeletonCard from '../components/SkeletonCard';
 import DepositModal from '../components/DepositModal';
 import WithdrawModal from '../components/WithdrawModal';
+import WalletCacheStatus from '../components/WalletCacheStatus';
 
 type ActiveModal = 'deposit' | 'withdraw' | null;
 
@@ -15,6 +16,8 @@ function Dashboard() {
   const { publicKey, setPublicKey } = useWalletStore();
   const { data: balances = [], isLoading: isLoadingBalances, error: balancesError } = useBalances();
   const { data: transactions = [], isLoading: isLoadingTransactions, error: transactionsError } = useTransactions();
+  const balancesUpdatedAt = useWalletStore((state) => state.balancesUpdatedAt);
+  const transactionsUpdatedAt = useWalletStore((state) => state.transactionsUpdatedAt);
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
 
   useEffect(() => {
@@ -47,6 +50,7 @@ function Dashboard() {
       {/* Balances */}
       <section className="mb-6" aria-labelledby="balances-heading">
         <h2 id="balances-heading" className="text-lg font-semibold mb-2">Balances</h2>
+        <WalletCacheStatus updatedAt={balancesUpdatedAt} />
         {isLoadingBalances ? (
           <div className="grid grid-cols-3 gap-3">
             <SkeletonCard />
@@ -113,6 +117,7 @@ function Dashboard() {
       {/* Transaction History */}
       <section aria-labelledby="transactions-heading">
         <h2 id="transactions-heading" className="text-lg font-semibold mb-2">Transaction History</h2>
+        <WalletCacheStatus updatedAt={transactionsUpdatedAt} />
         <TransactionList transactions={transactions} isLoading={isLoadingTransactions} />
       </section>
 

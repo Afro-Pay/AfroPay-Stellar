@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { SorobanRpc, TransactionBuilder, Networks, BASE_FEE, Transaction, FeeBumpTransaction } from 'stellar-sdk';
 import { SimulateTransactionDto } from './dto/simulate-transaction.dto';
+import { RpcClientService } from './rpc-client.service';
 
 export interface FootprintSummary {
   readOnly: string[];
@@ -35,16 +36,16 @@ export interface SimulationResult {
 @Injectable()
 export class SimulationService {
   private logger = new Logger(SimulationService.name);
-  private sorobanRpc: SorobanRpc.Server;
+  private sorobanRpc?: SorobanRpc.Server;
   private networkPassphrase: string;
 
-  constructor() {
+  constructor(private readonly rpcClient?: RpcClientService) {
     const rpcUrl = process.env.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org';
     const networkPassphrase = process.env.STELLAR_NETWORK === 'public'
       ? Networks.PUBLIC
       : Networks.TESTNET;
 
-    this.sorobanRpc = new SorobanRpc.Server(rpcUrl, { allowHttp: true });
+    this.sorobanRpc = this.rpcClient ? undefined : new SorobanRpc.Server(rpcUrl, { allowHttp: true });
     this.networkPassphrase = networkPassphrase;
   }
 
@@ -71,7 +72,9 @@ export class SimulationService {
       if (dto.transactionXdr) {
         tx = TransactionBuilder.fromXDR(dto.transactionXdr, this.networkPassphrase);
       } else {
-        const dummyAccount = await this.sorobanRpc.getAccount(dto.sender || 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF');
+        const dummyAccount = await this.withRpc((server) =>
+          server.getAccount(dto.sender || 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF'),
+        );
         const builder = new TransactionBuilder(dummyAccount, {
           fee: BASE_FEE,
           networkPassphrase: this.networkPassphrase,
@@ -79,7 +82,7 @@ export class SimulationService {
         tx = builder.setTimeout(30).build();
       }
 
-      const rawSimulation = await this.sorobanRpc.simulateTransaction(tx);
+      const rawSimulation = await this.withRpc((server) => server.simulateTransaction(tx));
       const executionTimeMs = Date.now() - startTime;
 
       if (SorobanRpc.Api.isSimulationError(rawSimulation)) {
@@ -120,7 +123,7 @@ export class SimulationService {
    * Fulfills criterion: All submitted transactions use simulated resource footprints
    */
   async prepareAndSimulateTransaction(tx: Transaction): Promise<{ transaction: Transaction; simulation: SimulationResult }> {
-    const rawSimulation = await this.sorobanRpc.simulateTransaction(tx);
+    const rawSimulation = await this.withRpc((server) => server.simulateTransaction(tx));
 
     if (SorobanRpc.Api.isSimulationError(rawSimulation)) {
       throw new BadRequestException(`Soroban transaction pre-flight simulation error: ${rawSimulation.error}`);
@@ -197,5 +200,12 @@ export class SimulationService {
       baseFee: baseFeeNum.toString(),
       totalRecommendedFee: totalRecommendedFee.toString(),
     };
+  }
+
+  private async withRpc<T>(operation: (server: SorobanRpc.Server) => Promise<T>): Promise<T> {
+    if (this.sorobanRpc) {
+      return operation(this.sorobanRpc);
+    }
+    return this.rpcClient.withSorobanServer((server) => operation(server));
   }
 }
