@@ -3,6 +3,8 @@ import { useTransactions } from '../hooks/useWalletData';
 import TransactionFilters from './TransactionFilters';
 import TransactionRow from './TransactionRow';
 import { Loader2, Inbox } from 'lucide-react';
+import WalletCacheStatus from './WalletCacheStatus';
+import { useWalletStore } from '../store/walletStore';
 
 /**
  * Number of records fetched from the server per page.
@@ -12,6 +14,7 @@ const PAGE_SIZE = 25;
 
 export default function TransactionDashboard() {
   const { data: transactions = [], isLoading: loading } = useTransactions();
+  const transactionsUpdatedAt = useWalletStore((state) => state.transactionsUpdatedAt);
 
   const [statusFilter, setStatusFilter] = useState('all');
   const [currencyFilter, setCurrencyFilter] = useState('all');
@@ -57,6 +60,7 @@ export default function TransactionDashboard() {
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-white mb-2">Transaction History</h1>
         <p className="text-gray-400">View and manage all your remittance activities.</p>
+        <WalletCacheStatus updatedAt={transactionsUpdatedAt} />
       </div>
 
       <TransactionFilters
