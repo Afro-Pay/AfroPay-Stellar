@@ -3,6 +3,7 @@ import { Horizon, Keypair } from 'stellar-sdk';
 import * as crypto from 'crypto';
 import { VaultService } from '../vault/vault.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { RpcClientService } from '../soroban/rpc-client.service';
 
 const HORIZON_URL = process.env.STELLAR_HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
 const server = new Horizon.Server(HORIZON_URL);
@@ -46,6 +47,7 @@ export class WalletService {
   constructor(
     private prisma: PrismaService,
     @Optional() private readonly vaultService?: VaultService,
+    @Optional() private readonly rpcClient?: RpcClientService,
   ) {}
 
   /**
@@ -466,6 +468,9 @@ export class WalletService {
   }
 
   private async loadAccount(publicKey: string) {
+    if (this.rpcClient) {
+      return this.rpcClient.withHorizonServer((horizon) => horizon.loadAccount(publicKey));
+    }
     return server.loadAccount(publicKey);
   }
 
