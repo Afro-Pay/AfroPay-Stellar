@@ -26,6 +26,19 @@ export default function SendForm() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [addressConfirmation, setAddressConfirmation] = useState('');
+  const [isOffline, setIsOffline] = useState(false);
+  const [offlineCount, setOfflineCount] = useState(0);
+
+  useEffect(() => {
+    const updateConnectivity = () => setIsOffline(!navigator.onLine);
+    updateConnectivity();
+    window.addEventListener('online', updateConnectivity);
+    window.addEventListener('offline', updateConnectivity);
+    return () => {
+      window.removeEventListener('online', updateConnectivity);
+      window.removeEventListener('offline', updateConnectivity);
+    };
+  }, []);
 
   // A malicious clipboard-hijacking extension can silently swap a copied
   // Stellar address for its own. Requiring the user to actively retype the
@@ -45,6 +58,7 @@ export default function SendForm() {
 
   const previewHeaderRef = useRef<HTMLHeadingElement>(null);
   const amountInputRef = useRef<HTMLInputElement>(null);
+  const simulationRequestRef = useRef(0);
 
   const handleSimulate = useCallback(async (isAutoRefresh = false) => {
     if (!form.destinationPublicKey || !form.amount) {
@@ -57,6 +71,7 @@ export default function SendForm() {
     }
     setFormError(null);
     clearError('send');
+    const requestId = ++simulationRequestRef.current;
     try {
       const result = await simulateTransfer({
         destinationPublicKey: form.destinationPublicKey,
@@ -64,6 +79,8 @@ export default function SendForm() {
         assetCode: form.assetCode,
         assetIssuer: form.assetIssuer,
       });
+
+      if (requestId !== simulationRequestRef.current) return;
 
       if (result.status === 'blocked') {
         const primaryIssue = result.issues?.find(i => i.code) || result.issues?.[0];
@@ -81,11 +98,9 @@ export default function SendForm() {
           }
         }
         setFormError(errMsg);
-        if (step === 'edit') {
-          setSimulation(null);
-        } else {
-          setCountdown(0);
-        }
+        setSimulation(result);
+        setCountdown(0);
+        setStep('preview');
       } else {
         setSimulation(result);
         setLastSimulationTime(Date.now());
@@ -98,16 +113,24 @@ export default function SendForm() {
         setStep('preview');
       }
     } catch (err: any) {
+      if (requestId !== simulationRequestRef.current) return;
       setFormError(err?.response?.data?.message || "Simulation failed. Please try again.");
-      if (step === 'edit') {
-        setSimulation(null);
-      } else {
-        setCountdown(0);
-      }
+      setSimulation(null);
+      setCountdown(0);
     } finally {
       setLoading(false);
     }
   }, [form, step, simulateTransfer, clearError]);
+
+  useEffect(() => {
+    if (step !== 'edit' || !form.destinationPublicKey || !form.amount) return;
+
+    const timer = setTimeout(() => {
+      void handleSimulate();
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [step, form.destinationPublicKey, form.amount, form.assetCode, form.assetIssuer, handleSimulate]);
 
   useEffect(() => {
     if (step !== 'preview' || !simulation || loading || countdown <= 0) return;
@@ -158,7 +181,7 @@ export default function SendForm() {
     if (isOffline) return; // Offline uses the dedicated "Queue Transfer Offline" button.
     if (step === 'edit') {
       handleSimulate();
-    } else if (step === 'preview' && simulation && countdown > 0 && isAddressConfirmed) {
+    } else if (step === 'preview' && simulation?.status === 'ok' && countdown > 0 && isAddressConfirmed) {
       handleConfirm();
     }
   };
@@ -230,6 +253,9 @@ export default function SendForm() {
       </div>
     );
   };
+
+  const destinationAsset = simulation?.path[simulation.path.length - 1] ?? form.assetCode;
+  const canSend = simulation?.status === 'ok' && countdown > 0;
 
   return (
     <form onSubmit={handleSubmit} className="bg-gray-900 rounded-xl p-5 space-y-4 border border-gray-800 shadow-xl" aria-describedby="send-form-status">
@@ -374,14 +400,14 @@ export default function SendForm() {
                 }
               }}
               disabled={isSubmitting}
-              className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 active:scale-[0.99] transition-all text-white rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 shadow-md shadow-amber-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-linear-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 active:scale-[0.99] transition-all text-white rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 shadow-md shadow-amber-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSubmitting ? 'Saving offline...' : 'Queue Transfer Offline'}
             </button>
           ) : (
             <button
               type="submit"
-              className="w-full bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 active:scale-[0.99] transition-all text-white rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 shadow-md shadow-indigo-600/20"
+              className="w-full bg-linear-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 active:scale-[0.99] transition-all text-white rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 shadow-md shadow-indigo-600/20"
             >
               Preview Transfer
             </button>
@@ -407,7 +433,11 @@ export default function SendForm() {
                 ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse'
                 : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
             }`}>
-              {countdown <= 0 ? 'Quote expired' : `Quote expires in ${countdown}s`}
+              {simulation.status === 'blocked'
+                ? 'Transfer blocked'
+                : countdown <= 0
+                ? 'Quote expired'
+                : `Quote expires in ${countdown}s`}
             </div>
           </div>
 
@@ -427,7 +457,7 @@ export default function SendForm() {
             <div className="flex justify-between items-baseline border-b border-gray-800/50 pb-2">
               <span className="text-gray-400 text-xs">Estimated Destination</span>
               <span className="font-semibold text-emerald-400 text-base">
-                {simulation.estimatedDestinationAmount} {form.assetCode}
+                {simulation.estimatedDestinationAmount ?? 'Unavailable'} {destinationAsset}
               </span>
             </div>
 
@@ -441,7 +471,7 @@ export default function SendForm() {
             <div className="flex justify-between items-baseline border-b border-gray-800/50 pb-2">
               <span className="text-gray-400 text-xs">Minimum Destination</span>
               <span className="font-medium text-gray-200">
-                {simulation.minimumDestinationAmount} {form.assetCode}
+                {simulation.minimumDestinationAmount ?? 'Unavailable'} {destinationAsset}
               </span>
             </div>
 
@@ -449,7 +479,7 @@ export default function SendForm() {
               <div className="flex justify-between items-baseline border-b border-gray-800/50 pb-2">
                 <span className="text-gray-400 text-xs">FX Effective Rate</span>
                 <span className="font-medium text-gray-200">
-                  1 {form.assetCode} = {simulation.effectiveRate.toFixed(4)} {form.assetCode}
+                  1 {form.assetCode} = {simulation.effectiveRate.toFixed(4)} {destinationAsset}
                 </span>
               </div>
             )}
@@ -461,6 +491,15 @@ export default function SendForm() {
               </div>
             )}
           </div>
+
+          {simulation.issues.length > 0 && (
+            <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-300" role="status">
+              <p className="font-semibold">Simulation issues</p>
+              <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
+                {simulation.issues.map((issue, index) => <li key={`${issue.code}-${index}`}>{issue.message}</li>)}
+              </ul>
+            </div>
+          )}
 
           {countdown > 0 && (
             <div>
@@ -493,7 +532,7 @@ export default function SendForm() {
             >
               Modify
             </button>
-            {countdown <= 0 ? (
+            {countdown <= 0 && simulation.status === 'ok' ? (
               <button
                 type="button"
                 onClick={() => handleSimulate(false)}
@@ -505,9 +544,9 @@ export default function SendForm() {
             ) : (
               <button
                 type="submit"
-                disabled={isSubmitting || isLoadingSend || !isAddressConfirmed}
+                disabled={isSubmitting || isLoadingSend || !canSend || !isAddressConfirmed}
                 aria-busy={isSubmitting || isLoadingSend}
-                className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] transition-all text-white rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300 shadow-md shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                className="flex-1 bg-linear-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] transition-all text-white rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300 shadow-md shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {isSubmitting || isLoadingSend ? (
                   <>
@@ -539,5 +578,3 @@ export default function SendForm() {
     </form>
   );
 };
-
-export default SendForm;

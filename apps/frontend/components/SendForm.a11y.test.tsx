@@ -18,7 +18,7 @@ async function expectNoSeriousAxeViolations(container: HTMLElement) {
   });
   const seriousViolations = violations.filter(({ impact }) =>
     impact === 'critical' || impact === 'serious',
-  );
+  ); 
 
   expect(seriousViolations).toEqual([]);
 }
@@ -54,12 +54,23 @@ async function fillAndPreview(destination: string, amount = '10') {
 }
 
 describe('SendForm destination confirmation', () => {
-  let simulateTransfer: ReturnType<typeof vi.fn>;
-  let sendTransfer: ReturnType<typeof vi.fn>;
+  let simulateTransfer: (data: {
+    destinationPublicKey: string;
+    amount: string;
+    assetCode: string;
+    assetIssuer?: string;
+  }) => Promise<SimulationResult>;
+  let sendTransfer: (data: {
+    destinationPublicKey: string;
+    amount: string;
+    assetCode: string;
+    assetIssuer?: string;
+    memo?: string;
+  }) => Promise<{ txId?: string }>;
 
   beforeEach(() => {
-    simulateTransfer = vi.fn().mockResolvedValue(OK_SIMULATION);
-    sendTransfer = vi.fn().mockResolvedValue({ txId: 'tx-1' });
+    simulateTransfer = vi.fn(async () => OK_SIMULATION);
+    sendTransfer = vi.fn(async () => ({ txId: 'tx-1' }));
     useWalletStore.setState({
       simulateTransfer,
       sendTransfer,
