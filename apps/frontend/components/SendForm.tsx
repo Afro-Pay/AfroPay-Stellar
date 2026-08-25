@@ -538,6 +538,5 @@ export default function SendForm() {
       )}
     </form>
   );
-};
+}
 
-export default SendForm;

@@ -272,3 +272,61 @@ model AuditLog {
   @@index([createdAt])
   @@index([previousHash])
 }
+
+/// SEP-24 interactive transaction lifecycle states per the Stellar specification.
+enum Sep24TransactionStatus {
+  /// Session created, waiting for user to complete the interactive webview.
+  incomplete
+  /// User completed the webview; waiting for them to send the on-chain transfer.
+  pending_user_transfer_start
+  /// On-chain transfer detected, pending anchor-side processing.
+  pending_anchor
+  /// Anchor is processing (e.g. fiat payout).
+  pending_external
+  /// Transaction completed successfully.
+  completed
+  /// Anchor has refunded the user.
+  refunded
+  /// Transaction expired before completion.
+  expired
+  /// An error occurred.
+  error
+}
+
+/// An interactive SEP-24 deposit or withdrawal session. Each row tracks a
+/// single webview-initiated flow from session handshake through completion.
+model Sep24Transaction {
+  id                String                  @id @default(uuid())
+  /// "deposit" or "withdraw"
+  kind              String
+  status            Sep24TransactionStatus  @default(incomplete)
+  /// Stellar public key of the user (from SEP-10 token).
+  stellarAccount    String
+  /// Asset being deposited or withdrawn (e.g. "USDC").
+  assetCode         String
+  /// Asset issuer public key; null for native XLM.
+  assetIssuer       String?
+  /// Requested amount (string for decimal precision).
+  amount            String?
+  /// One-time JWT session token for the webview.
+  sessionToken      String                  @unique
+  /// Session token expiration (UTC).
+  sessionExpiresAt  DateTime
+  /// KYC / user-submitted data stored as JSON after webview completion.
+  kycData           Json?
+  /// Payment method selected in the webview (e.g. "bank_transfer", "mobile_money").
+  paymentMethod     String?
+  /// Stellar transaction hash once an on-chain transfer is detected.
+  stellarTxHash     String?                 @unique
+  /// Anchor-generated memo for deposit routing.
+  memo              String?
+  memoType          String?
+  /// Human-readable status message or error detail.
+  message           String?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  @@index([stellarAccount])
+  @@index([status])
+  @@index([createdAt])
+}
