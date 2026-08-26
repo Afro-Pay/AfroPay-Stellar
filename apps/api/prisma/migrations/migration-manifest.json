@@ -13,6 +13,7 @@
     "20260626000000_add_wallet_envelope_encryption": "safe",
     "20260720000000_add_transaction_idempotency_key": "safe",
     "20260726000000_add_pending_review_status": "safe",
-    "20260819000000_add_compliance_anonymization": "safe"
+    "20260819000000_add_compliance_anonymization": "safe",
+    "20260826010000_add_liquidity_rebalancing": "safe"
   }
 }

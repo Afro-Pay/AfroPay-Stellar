@@ -61,6 +61,14 @@ enum ComplianceActionStatus {
   REJECTED
 }
 
+enum LiquidityRebalanceStatus {
+  PLANNED
+  EXECUTING
+  EXECUTED
+  FAILED
+  SKIPPED
+}
+
 model User {
   id           String        @id @default(uuid())
   email        String        @unique
@@ -72,6 +80,8 @@ model User {
   wallets      Wallet[]
   transactions Transaction[]
   kyc          KycRecord?
+  liquidityObservations LiquidityObservation[] @relation("LiquidityObservationCreatedBy")
+  liquidityRebalances LiquidityRebalance[] @relation("LiquidityRebalanceRequestedBy")
 }
 
 /// Non-reversible lookup record used to make erasure idempotent after the
@@ -158,6 +168,49 @@ model Wallet {
   @@unique([userId, alias])
   /// Index for efficient per-user wallet queries
   @@index([userId, isDefault])
+}
+
+/// Hourly reserve snapshots from bank/mobile-money mock off-ramps and Stellar wallets.
+model LiquidityObservation {
+  id                 String   @id @default(uuid())
+  corridor           String
+  reserveAsset       String
+  reserveAmount      Decimal  @db.Decimal(30, 7)
+  forecastedWeeklyDemand Decimal @db.Decimal(30, 7)
+  thresholdAmount    Decimal  @db.Decimal(30, 7)
+  source             String
+  observedAt         DateTime @default(now())
+  createdBy          String?
+
+  user User? @relation("LiquidityObservationCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([corridor, observedAt(sort: Desc)])
+  @@index([reserveAsset, observedAt(sort: Desc)])
+}
+
+/// Auditable treasury rebalance decision and its worker execution result.
+model LiquidityRebalance {
+  id              String                  @id @default(uuid())
+  corridor        String
+  fromAsset       String
+  toAsset         String
+  /// Amount sent from the treasury asset.
+  sourceAmount    Decimal                 @db.Decimal(30, 7)
+  /// Minimum amount expected in the destination reserve asset.
+  amount          Decimal                 @db.Decimal(30, 7)
+  status          LiquidityRebalanceStatus @default(PLANNED)
+  reason          String
+  txHash          String?                 @unique
+  failureReason   String?
+  requestedBy     String?
+  executedAt      DateTime?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  user User? @relation("LiquidityRebalanceRequestedBy", fields: [requestedBy], references: [id], onDelete: SetNull)
+
+  @@index([corridor, createdAt(sort: Desc)])
+  @@index([status])
 }
 
 model Transaction {

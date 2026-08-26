@@ -1,5 +1,6 @@
 mod models;
 mod queue;
+mod rebalance;
 mod settlement;
 mod stellar;
 
@@ -7,6 +8,7 @@ use dotenv::dotenv;
 use std::env;
 use models::TransactionJob;
 use queue::QueueService;
+use rebalance::{process_rebalance_job, rebalance_enabled};
 use settlement::{fetch_account_sequence, process_compliance_job, submit_xdr};
 use stellar::{build_payment_xdr, derive_public_key, PUBLIC_PASSPHRASE, TESTNET_PASSPHRASE};
 
@@ -44,6 +46,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+
+    // Liquidity rebalancing listener. It is intentionally independent of the
+    // payment loop so reserve maintenance cannot add latency to core payments.
+    if rebalance_enabled() {
+        let liquidity_queue = queue_service.clone();
+        tokio::spawn(async move {
+            loop {
+                match liquidity_queue.receive_liquidity_job().await {
+                    Ok(Some(job)) => {
+                        println!("💧 Processing liquidity rebalance: {} ({})", job.rebalance_id, job.corridor);
+                        if let Err(error) = process_rebalance_job(&job).await {
+                            eprintln!("❌ Liquidity rebalance {} failed: {}", job.rebalance_id, error);
+                        }
+                    }
+                    Ok(None) => tokio::time::sleep(tokio::time::Duration::from_millis(500)).await,
+                    Err(error) => {
+                        eprintln!("❌ Liquidity queue error: {}", error);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    }
+                }
+            }
+        });
+    }
 
     // Payment processing loop
     loop {
