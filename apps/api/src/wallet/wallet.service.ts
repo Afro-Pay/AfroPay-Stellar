@@ -1,7 +1,19 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { Logger } from 'nestjs-pino';
+import * as crypto from 'crypto';
+import { Horizon, Keypair, Networks } from 'stellar-sdk';
+import { ensureTrustline, isTrustlineError, TrustlineAsset } from '../anchor/trustline.utils';
+
+const STELLAR_NETWORK = process.env.STELLAR_NETWORK ?? 'testnet';
+const HORIZON_URL =
+  process.env.STELLAR_HORIZON_URL ??
+  (STELLAR_NETWORK === 'testnet' ? 'https://horizon-testnet.stellar.org' : 'https://horizon.stellar.org');
+const NETWORK_PASSPHRASE = STELLAR_NETWORK === 'testnet' ? Networks.TESTNET : Networks.PUBLIC;
+const FRIENDBOT_URL = 'https://friendbot.stellar.org';
+
+const server = new Horizon.Server(HORIZON_URL);
 
 export class AuthTagMismatchError extends Error {
   constructor(message = 'AuthTagMismatch') {
@@ -37,12 +49,11 @@ export class WalletService {
     private logger: Logger,
   ) {}
 
-  async createWallet(userId: string, publicKey: string, name?: string) {
+  async createWallet(userId: string, publicKey: string) {
     const wallet = await this.prisma.wallet.create({
       data: {
         userId,
         publicKey,
-        name,
       },
     });
 
@@ -50,7 +61,7 @@ export class WalletService {
     await this.auditService.log(
       userId,
       'WALLET_CREATE',
-      { walletId: wallet.id, publicKey, name },
+      { walletId: wallet.id, publicKey },
     );
 
     this.logger.info({
@@ -60,7 +71,101 @@ export class WalletService {
       publicKey,
     });
 
+    if (STELLAR_NETWORK === 'testnet') {
+      await this.fundTestnetAccount(userId, wallet.id, publicKey);
+    }
+
     return wallet;
+  }
+
+  /**
+   * Testnet-only: funds a freshly created account via Friendbot so it meets
+   * Stellar's minimum reserve. Never throws — wallet creation must succeed
+   * even if Friendbot is unreachable or the account is already funded.
+   */
+  private async fundTestnetAccount(userId: string, walletId: string, publicKey: string) {
+    try {
+      const response = await fetch(`${FRIENDBOT_URL}?addr=${encodeURIComponent(publicKey)}`);
+      if (!response.ok) {
+        throw new Error(`Friendbot responded with status ${response.status}`);
+      }
+
+      this.logger.info({ event: 'wallet_funded', userId, walletId, publicKey });
+    } catch (error: any) {
+      this.logger.error({
+        event: 'wallet_funding_failed',
+        userId,
+        walletId,
+        publicKey,
+        error: error?.message,
+      });
+    }
+  }
+
+  /**
+   * Adds a trustline for a non-native asset (e.g. USDC, NGN) so the wallet
+   * can hold and receive it. No-op if the trustline already exists.
+   */
+  async addTrustline(userId: string, assetCode: string, assetIssuer: string, limit?: string) {
+    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+    if (!wallet) throw new NotFoundException('Wallet not found');
+
+    const keypair = await this.getKeypair(userId);
+    const asset: TrustlineAsset = { code: assetCode, issuer: assetIssuer };
+
+    try {
+      const result = await ensureTrustline(HORIZON_URL, keypair, asset, NETWORK_PASSPHRASE, limit);
+
+      await this.auditService.log(userId, 'WALLET_TRUSTLINE_ADD', {
+        walletId: wallet.id,
+        assetCode,
+        assetIssuer,
+        created: result.created,
+        txHash: result.txHash,
+      });
+
+      this.logger.info({
+        event: 'wallet_trustline_added',
+        userId,
+        walletId: wallet.id,
+        assetCode,
+        assetIssuer,
+        created: result.created,
+      });
+
+      return {
+        assetCode,
+        assetIssuer,
+        created: result.created,
+        txHash: result.txHash ?? null,
+        balance: result.status.balance ?? '0',
+        limit: result.status.limit ?? limit ?? null,
+      };
+    } catch (error) {
+      if (isTrustlineError(error as any)) {
+        throw new BadRequestException((error as any).message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Returns the wallet's on-chain balances. Unfunded/not-yet-created
+   * accounts return an empty array instead of throwing.
+   */
+  async getBalances(userId: string, _afterTxHash?: string) {
+    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+    if (!wallet) throw new NotFoundException('Wallet not found');
+
+    try {
+      const account = await this.loadAccount(wallet.publicKey);
+      return this.assetsFromHorizonBalances(account.balances ?? []);
+    } catch (error) {
+      if (this.isHorizonNotFound(error)) {
+        return [];
+      }
+      throw error;
+    }
   }
 
   async getWallets(userId: string) {

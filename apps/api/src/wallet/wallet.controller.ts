@@ -1,7 +1,8 @@
-import { Controller, Post, Get, Param, Query, UseGuards, Request, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Get, Param, Query, Body, UseGuards, Request, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { WalletService } from './wallet.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AddTrustlineDto } from './dto/add-trustline.dto';
 
 @ApiTags('wallet')
 @Controller('wallet')
@@ -42,5 +43,22 @@ export class WalletController {
     @Query('afterTxHash') afterTxHash?: string,
   ) {
     return this.walletService.getBalances(req.user.userId, afterTxHash);
+  }
+
+  @Post('trustline')
+  @ApiOperation({ summary: 'Add a trustline for a non-native asset (e.g. USDC, NGN)' })
+  @ApiResponse({ status: 201, description: 'Trustline added (or already present)' })
+  @ApiResponse({ status: 400, description: 'Invalid asset issuer or trustline could not be established' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async addTrustline(
+    @Request() req: any,
+    @Body() dto: AddTrustlineDto,
+  ) {
+    return this.walletService.addTrustline(
+      req.user.userId,
+      dto.assetCode,
+      dto.assetIssuer,
+      dto.limit,
+    );
   }
 }

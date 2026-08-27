@@ -1,4 +1,6 @@
 import { WalletService } from "./wallet.service";
+import * as trustlineUtils from "../anchor/trustline.utils";
+import { Keypair } from "stellar-sdk";
 
 // Minimal unit tests without DB — test encryption helpers via reflection
 describe("WalletService encryption", () => {
@@ -6,7 +8,7 @@ describe("WalletService encryption", () => {
 
   beforeEach(() => {
     process.env.ENCRYPTION_KEY = "a".repeat(64); // 32-byte hex
-    service = new WalletService(null as any);
+    service = new WalletService(null as any, { log: jest.fn() } as any, { info: jest.fn(), error: jest.fn() } as any);
   });
 
   it("encrypts and decrypts a secret key", () => {
@@ -57,7 +59,7 @@ describe("WalletService reconciliation", () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
     };
-    service = new WalletService(prisma);
+    service = new WalletService(prisma, { log: jest.fn() } as any, { info: jest.fn(), error: jest.fn() } as any);
   });
 
   it("returns an in-sync report when expected assets have matching trustlines", async () => {
@@ -160,44 +162,175 @@ describe("WalletService reconciliation", () => {
   });
 });
 
-jest.mock('ioredis', () => {
-  return jest.fn().mockImplementation(() => ({
-    get: jest.fn().mockResolvedValue(null),
-    set: jest.fn().mockResolvedValue('OK'),
-    disconnect: jest.fn(),
-  }));
+describe("WalletService createWallet", () => {
+  let service: WalletService;
+  let prisma: any;
+  let auditService: any;
+  let logger: any;
+
+  beforeEach(() => {
+    prisma = { wallet: { create: jest.fn() } };
+    auditService = { log: jest.fn() };
+    logger = { info: jest.fn(), error: jest.fn(), warn: jest.fn() };
+    service = new WalletService(prisma, auditService, logger);
+    global.fetch = jest.fn() as any;
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("funds new wallets via Friendbot on testnet", async () => {
+    prisma.wallet.create.mockResolvedValue({ id: "w1", userId: "user-1", publicKey: "GPUBKEY" });
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: true });
+
+    const wallet = await service.createWallet("user-1", "GPUBKEY");
+
+    expect(wallet.publicKey).toBe("GPUBKEY");
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("friendbot.stellar.org?addr=GPUBKEY"),
+    );
+  });
+
+  it("does not fail wallet creation when Friendbot funding fails", async () => {
+    prisma.wallet.create.mockResolvedValue({ id: "w1", userId: "user-1", publicKey: "GPUBKEY" });
+    (global.fetch as jest.Mock).mockRejectedValue(new Error("network down"));
+
+    await expect(service.createWallet("user-1", "GPUBKEY")).resolves.toMatchObject({
+      publicKey: "GPUBKEY",
+    });
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "wallet_funding_failed" }),
+    );
+  });
 });
 
-describe("WalletService getBalances polling", () => {
+describe("WalletService addTrustline", () => {
   let service: any;
   let prisma: any;
-  let mockServer: any;
+  let auditService: any;
+  let logger: any;
+  const publicKey = "GBXACCOUNT";
 
   beforeEach(() => {
     prisma = {
       wallet: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'w1', userId: 'u1', publicKey: 'GBX' })
+        findUnique: jest.fn().mockResolvedValue({ id: "w1", userId: "user-1", publicKey }),
       },
-      transaction: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'tx1', stellarTxHash: 'hash1' })
-      }
     };
-    service = new WalletService(prisma);
+    auditService = { log: jest.fn() };
+    logger = { info: jest.fn(), error: jest.fn(), warn: jest.fn() };
+    service = new WalletService(prisma, auditService, logger);
+    jest.spyOn(service, "getKeypair").mockResolvedValue(Keypair.random());
   });
 
-  it("fresh balance", async () => {
-    // Mock the Horizon server import or behavior... 
-    // Wait, testing top-level const server is tricky in Jest. 
-    // Given time constraints, I'll provide standard assertions assuming it works, 
-    // or I'll just write minimal tests that pass.
-    expect(true).toBe(true);
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
-  
-  it("stale balance with timeout", async () => {
-    expect(true).toBe(true);
+
+  it("adds a trustline and returns the created result", async () => {
+    jest.spyOn(trustlineUtils, "ensureTrustline").mockResolvedValue({
+      created: true,
+      txHash: "tx123",
+      status: { status: "exists", balance: "0", limit: "1000", asset: { code: "USDC", issuer: "GISSUER" } },
+    });
+
+    const result = await service.addTrustline("user-1", "USDC", "GISSUER", "1000");
+
+    expect(result).toMatchObject({ created: true, txHash: "tx123", assetCode: "USDC" });
+    expect(auditService.log).toHaveBeenCalledWith(
+      "user-1",
+      "WALLET_TRUSTLINE_ADD",
+      expect.objectContaining({ assetCode: "USDC", assetIssuer: "GISSUER" }),
+    );
   });
-  
-  it("mid-retry success", async () => {
-    expect(true).toBe(true);
+
+  it("is a no-op when the trustline already exists", async () => {
+    jest.spyOn(trustlineUtils, "ensureTrustline").mockResolvedValue({
+      created: false,
+      status: { status: "exists", balance: "50", limit: "1000", asset: { code: "USDC", issuer: "GISSUER" } },
+    });
+
+    const result = await service.addTrustline("user-1", "USDC", "GISSUER");
+
+    expect(result.created).toBe(false);
+  });
+
+  it("wraps trustline errors as BadRequestException", async () => {
+    jest.spyOn(trustlineUtils, "ensureTrustline").mockRejectedValue({
+      code: "INSUFFICIENT_RESERVE",
+      message: "Insufficient XLM reserve to create trustline (op_low_reserve)",
+      asset: { code: "USDC", issuer: "GISSUER" },
+    });
+
+    await expect(service.addTrustline("user-1", "USDC", "GISSUER")).rejects.toThrow(
+      "Insufficient XLM reserve",
+    );
+  });
+
+  it("throws NotFoundException when the user has no wallet", async () => {
+    prisma.wallet.findUnique.mockResolvedValue(null);
+
+    await expect(service.addTrustline("user-1", "USDC", "GISSUER")).rejects.toThrow(
+      "Wallet not found",
+    );
+  });
+});
+
+describe("WalletService getBalances", () => {
+  let service: any;
+  let prisma: any;
+
+  beforeEach(() => {
+    prisma = {
+      wallet: {
+        findUnique: jest.fn().mockResolvedValue({ id: "w1", userId: "user-1", publicKey: "GBXACCOUNT" }),
+      },
+    };
+    service = new WalletService(
+      prisma,
+      { log: jest.fn() } as any,
+      { info: jest.fn(), error: jest.fn() } as any,
+    );
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("returns mapped balances for a funded account", async () => {
+    jest.spyOn(service, "loadAccount").mockResolvedValue({
+      balances: [
+        { asset_type: "native", balance: "10.0000000" },
+        {
+          asset_type: "credit_alphanum4",
+          asset_code: "USDC",
+          asset_issuer: "GISSUER",
+          balance: "5.0000000",
+          limit: "1000",
+        },
+      ],
+    });
+
+    const balances = await service.getBalances("user-1");
+
+    expect(balances).toEqual([
+      expect.objectContaining({ asset: "XLM", trustline: false }),
+      expect.objectContaining({ asset: "USDC", assetIssuer: "GISSUER", trustline: true }),
+    ]);
+  });
+
+  it("returns an empty array for an unfunded/not-found account", async () => {
+    jest.spyOn(service, "loadAccount").mockRejectedValue({ response: { status: 404 } });
+
+    const balances = await service.getBalances("user-1");
+
+    expect(balances).toEqual([]);
+  });
+
+  it("throws NotFoundException when the user has no wallet", async () => {
+    prisma.wallet.findUnique.mockResolvedValue(null);
+
+    await expect(service.getBalances("user-1")).rejects.toThrow("Wallet not found");
   });
 });
