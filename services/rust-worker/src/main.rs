@@ -2,6 +2,7 @@ mod models;
 mod queue;
 mod settlement;
 mod stellar;
+mod path_routing;
 
 use dotenv::dotenv;
 use std::env;
@@ -9,6 +10,7 @@ use models::TransactionJob;
 use queue::QueueService;
 use settlement::{fetch_account_sequence, process_compliance_job, submit_xdr};
 use stellar::{build_payment_xdr, derive_public_key, PUBLIC_PASSPHRASE, TESTNET_PASSPHRASE};
+use path_routing::{ArbitrageConfig, run_arbitrage_daemon};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -44,6 +46,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+
+    // Arbitrage detector daemon — polls SDEX and Soroban AMM pools for price
+    // discrepancies and logs opportunities for the rebalancing engine.
+    let horizon_url = env::var("STELLAR_HORIZON_URL")
+        .unwrap_or_else(|_| "https://horizon-testnet.stellar.org".to_string());
+    let arb_config = ArbitrageConfig {
+        horizon_url,
+        poll_interval: std::time::Duration::from_secs(30),
+        ..Default::default()
+    };
+    tokio::spawn(run_arbitrage_daemon(arb_config));
 
     // Payment processing loop
     loop {
