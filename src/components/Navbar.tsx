@@ -6,6 +6,7 @@ import {
   ArrowLeftRight, 
   History, 
   ShieldCheck, 
+  Droplets,
   Copy, 
   Check, 
   QrCode, 
@@ -16,8 +17,8 @@ import {
 import { WalletState } from '../types';
 
 interface NavbarProps {
-  activeTab: 'dashboard' | 'send' | 'anchor' | 'history' | 'kyc';
-  setActiveTab: (tab: 'dashboard' | 'send' | 'anchor' | 'history' | 'kyc') => void;
+  activeTab: 'dashboard' | 'send' | 'anchor' | 'history' | 'kyc' | 'liquidity';
+  setActiveTab: (tab: 'dashboard' | 'send' | 'anchor' | 'history' | 'kyc' | 'liquidity') => void;
   wallet: WalletState;
   onOpenQR: () => void;
 }
@@ -153,6 +154,18 @@ export const Navbar: React.FC<NavbarProps> = ({
               <ShieldCheck className="w-4 h-4" />
               <span>KYC & Risk</span>
             </button>
+
+            <button
+              onClick={() => setActiveTab('liquidity')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-all ${
+                activeTab === 'liquidity'
+                  ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              <Droplets className="w-4 h-4" />
+              <span>Liquidity Health</span>
+            </button>
           </nav>
 
           {/* Wallet Address & Controls */}
@@ -235,6 +248,15 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <ShieldCheck className="w-4 h-4" />
           <span>KYC</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('liquidity')}
+          className={`flex flex-col items-center py-1 px-2.5 rounded ${
+            activeTab === 'liquidity' ? 'text-cyan-400 font-semibold' : 'text-slate-400'
+          }`}
+        >
+          <Droplets className="w-4 h-4" />
+          <span>Liquidity</span>
         </button>
       </div>
     </header>

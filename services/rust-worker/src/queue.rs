@@ -9,12 +9,14 @@ use anyhow::Result;
 use redis::AsyncCommands;
 use tracing::info;
 
-use crate::models::{ComplianceJob, TransactionJob};
+use crate::models::{ComplianceJob, LiquidityRebalanceJob, TransactionJob};
 
 /// Redis list consumed by the worker for payment jobs.
 const TRANSACTIONS_QUEUE: &str = "stellar_jobs";
 /// Redis list consumed by the worker for compliance (freeze/clawback) jobs.
 const COMPLIANCE_QUEUE: &str = "compliance_jobs";
+/// Redis list consumed by the worker for treasury liquidity rebalances.
+const LIQUIDITY_QUEUE: &str = "liquidity_rebalance_jobs";
 
 /// Minimal blocking-pop queue client shared by the payment and compliance
 /// processing loops. Clone is cheap (the underlying `redis::Client` is
@@ -41,6 +43,21 @@ impl QueueService {
             Some((_, payload)) => {
                 let job: TransactionJob = serde_json::from_str(&payload)?;
                 info!("Received payment job: {}", job.id);
+                Ok(Some(job))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Blocking-pop a liquidity rebalance job, or `None` on timeout.
+    pub async fn receive_liquidity_job(&self) -> Result<Option<LiquidityRebalanceJob>> {
+        let mut conn = self.client.get_async_connection().await?;
+        let entry: Option<(String, String)> =
+            conn.blpop(LIQUIDITY_QUEUE, 1.0).await.unwrap_or(None);
+        match entry {
+            Some((_, payload)) => {
+                let job: LiquidityRebalanceJob = serde_json::from_str(&payload)?;
+                info!("Received liquidity rebalance job: {}", job.rebalance_id);
                 Ok(Some(job))
             }
             None => Ok(None),

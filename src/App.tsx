@@ -7,12 +7,13 @@ import { AnchorRails } from './components/AnchorRails';
 import { TransactionLedger } from './components/TransactionLedger';
 import { KYCPanel } from './components/KYCPanel';
 import { StellarQRModal } from './components/StellarQRModal';
+import { LiquidityHealthPanel } from './components/LiquidityHealthPanel';
 import { StorageService } from './lib/storage';
 import { WalletState, TransactionRecord } from './types';
 import { ShieldCheck, Zap, Globe, Github } from 'lucide-react';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'send' | 'anchor' | 'history' | 'kyc'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'send' | 'anchor' | 'history' | 'kyc' | 'liquidity'>('dashboard');
   const [wallet, setWallet] = useState<WalletState>(StorageService.getWallet());
   const [transactions, setTransactions] = useState<TransactionRecord[]>(StorageService.getTransactions());
   const [qrModalOpen, setQrModalOpen] = useState(false);
@@ -82,6 +83,10 @@ export function App() {
 
           {activeTab === 'kyc' && (
             <KYCPanel />
+          )}
+
+          {activeTab === 'liquidity' && (
+            <LiquidityHealthPanel />
           )}
         </main>
       </div>
