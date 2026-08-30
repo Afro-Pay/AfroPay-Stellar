@@ -6,6 +6,20 @@ use soroban_sdk::{
 
 pub const VERSION: u32 = 2;
 pub const STORAGE_VERSION: u32 = 2;
+pub const MIN_TWAP_SAMPLES: u64 = 10;
+pub const MAX_TWAP_DEVIATION_BPS: i128 = 500; // 5%
+pub const MIN_LEDGER_GAP: u64 = 2;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceFeedState {
+    pub last_price: i128,
+    pub twap: i128,
+    pub cumulative_price: i128,
+    pub sample_count: u64,
+    pub last_ledger: u64,
+    pub is_suspended: bool,
+}
 
 #[contracttype]
 #[derive(Clone)]
@@ -14,6 +28,8 @@ pub enum DataKey {
     Escrow(U256),
     Admin,
     StorageVersion,
+    PriceFeed,
+    UserActionLedger(Address),
 }
 
 #[contracttype]
@@ -34,6 +50,100 @@ pub struct Contract;
 
 #[contractimpl]
 impl Contract {
+    fn validate_price_guard(env: &Env) {
+        let price_feed: Option<PriceFeedState> = env.storage().persistent().get(&DataKey::PriceFeed);
+
+        if let Some(feed) = price_feed {
+            if feed.is_suspended {
+                panic!("price feed suspended: TWAP drift exceeds 5% threshold");
+            }
+
+            if feed.sample_count >= MIN_TWAP_SAMPLES && feed.twap > 0 {
+                let deviation_bps = ((feed.last_price - feed.twap).abs() * 10_000) / feed.twap;
+                if deviation_bps > MAX_TWAP_DEVIATION_BPS {
+                    panic!("price feed deviates beyond slippage limits");
+                }
+            }
+        }
+    }
+
+    fn enforce_user_block_delay(env: &Env, user: &Address) {
+        let current_ledger = env.ledger().sequence();
+        let last_action_ledger: Option<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::UserActionLedger(user.clone()));
+
+        if let Some(last_ledger) = last_action_ledger {
+            if current_ledger <= last_ledger + MIN_LEDGER_GAP - 1 {
+                panic!("flash-loan guard blocked: same-ledger or consecutive-ledger replay");
+            }
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::UserActionLedger(user.clone()), &current_ledger);
+    }
+
+    pub fn update_price(env: Env, spot_price: i128) -> i128 {
+        if spot_price <= 0 {
+            panic!("spot price must be positive");
+        }
+
+        let current_ledger = env.ledger().sequence();
+        let mut feed: PriceFeedState = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PriceFeed)
+            .unwrap_or(PriceFeedState {
+                last_price: spot_price,
+                twap: spot_price,
+                cumulative_price: spot_price,
+                sample_count: 0,
+                last_ledger: 0,
+                is_suspended: false,
+            });
+
+        if feed.last_ledger != 0 && current_ledger <= feed.last_ledger {
+            panic!("price update attempted in the same ledger block");
+        }
+
+        feed.cumulative_price += spot_price;
+        feed.sample_count += 1;
+        feed.last_price = spot_price;
+
+        if feed.sample_count >= MIN_TWAP_SAMPLES as u64 {
+            let samples = feed.sample_count as i128;
+            feed.twap = feed.cumulative_price / samples;
+            let deviation_bps = ((feed.last_price - feed.twap).abs() * 10_000) / feed.twap;
+            if deviation_bps > MAX_TWAP_DEVIATION_BPS {
+                feed.is_suspended = true;
+            }
+        } else {
+            feed.twap = feed.cumulative_price / feed.sample_count as i128;
+        }
+
+        feed.last_ledger = current_ledger;
+        env.storage().persistent().set(&DataKey::PriceFeed, &feed);
+        feed.twap
+    }
+
+    pub fn update_price_feed(env: Env, spot_price: i128) -> i128 {
+        Self::update_price(env, spot_price)
+    }
+
+    pub fn record_price(env: Env, spot_price: i128) -> i128 {
+        Self::update_price(env, spot_price)
+    }
+
+    pub fn price_guard_status(env: Env) -> bool {
+        let feed: Option<PriceFeedState> = env.storage().persistent().get(&DataKey::PriceFeed);
+        match feed {
+            Some(feed) => !feed.is_suspended,
+            None => true,
+        }
+    }
+
     pub fn initialize(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("contract already initialized");
@@ -96,6 +206,9 @@ impl Contract {
         if amount <= 0 {
             panic!("amount must be positive");
         }
+
+        Self::validate_price_guard(&env);
+        Self::enforce_user_block_delay(&env, &from);
 
         let current_ledger_time = env.ledger().timestamp();
         if release_timestamp <= current_ledger_time {
@@ -175,6 +288,9 @@ impl Contract {
         if record.is_refunded {
             panic!("escrow already refunded");
         }
+
+        Self::validate_price_guard(&env);
+        Self::enforce_user_block_delay(&env, &record.depositor);
 
         let current_ledger_time = env.ledger().timestamp();
         if current_ledger_time < record.release_timestamp {
