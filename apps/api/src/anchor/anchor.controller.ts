@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { WalletService } from '../wallet/wallet.service';
 import { AnchorService } from './anchor.service';
 import { StellarAddressPipe } from '../common/pipes/stellar-address.pipe';
+import { RateLimit } from '../rate-limit/rate-limit.decorator';
 
 @ApiTags('anchor')
 @Controller('anchor')
@@ -87,6 +88,15 @@ export class AnchorController {
   }
 
   @Get('fx-rate')
+  // FX-rate refreshes fan out to the anchor/Horizon; cap per-user request
+  // rate so repeated refreshes from one caller can't exhaust the shared quota.
+  @RateLimit({
+    keyPrefix: 'anchor:fx-rate',
+    limit: 10,
+    windowMs: 60_000,
+    limitEnv: 'ANCHOR_FX_RATE_RATE_LIMIT_MAX',
+    windowMsEnv: 'ANCHOR_FX_RATE_RATE_LIMIT_WINDOW_MS',
+  })
   @ApiOperation({ summary: 'Get exchange rate from anchor' })
   @ApiQuery({
     name: 'account',
@@ -105,6 +115,7 @@ export class AnchorController {
   @ApiResponse({ status: 400, description: 'Invalid Stellar address' })
   @ApiResponse({ status: 403, description: 'Account does not match user wallet' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 429, description: 'Too many requests' })
   async getExchangeRate(
     @Request() req: any,
     @Query('account', StellarAddressPipe) account: string,

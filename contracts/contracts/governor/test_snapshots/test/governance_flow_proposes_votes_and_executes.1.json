@@ -158,7 +158,9 @@
           "sub_invocations": []
         }
       ]
-    ]
+    ],
+    [],
+    []
   ],
   "ledger": {
     "protocol_version": 26,
@@ -333,12 +335,24 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "Executors"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "map": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "FeeBps"
                           }
                         ]
                       },
                       "val": {
-                        "u32": 100
+                        "u32": 120
                       }
                     },
                     {
@@ -428,7 +442,7 @@
                                   "val": {
                                     "vec": [
                                       {
-                                        "symbol": "Defeated"
+                                        "symbol": "Executed"
                                       }
                                     ]
                                   }
@@ -474,6 +488,18 @@
                             }
                           }
                         ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "StorageVersion"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u32": 3
                       }
                     },
                     {

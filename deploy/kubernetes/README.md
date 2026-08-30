@@ -14,7 +14,8 @@ This directory contains the Kubernetes manifests required to deploy the AfroPay-
 *   [rust-worker.yaml](file:///c:/Users/USER/OneDrive/Documents/GitHub/AfroPay-Stellar/deploy/kubernetes/rust-worker.yaml) — Deployment and Service for the transaction submission worker.
 *   [python-analytics.yaml](file:///c:/Users/USER/OneDrive/Documents/GitHub/AfroPay-Stellar/deploy/kubernetes/python-analytics.yaml) — Deployment and Service for the fraud detection service.
 *   [ingress.yaml](file:///c:/Users/USER/OneDrive/Documents/GitHub/AfroPay-Stellar/deploy/kubernetes/ingress.yaml) — Nginx-based Ingress configuration for public-facing route routing.
-*   [migration-job.yaml](file:///c:/Users/USER/OneDrive/Documents/GitHub/AfroPay-Stellar/deploy/kubernetes/migration-job.yaml) — One-off database migration execution job.
+*   [migration-job-pre-deploy.yaml](file:///c:/Users/USER/OneDrive/Documents/GitHub/AfroPay-Stellar/deploy/kubernetes/migration-job-pre-deploy.yaml) — Applies safe (additive) migrations before the new api/rust-worker pods start.
+*   [migration-job-post-deploy.yaml](file:///c:/Users/USER/OneDrive/Documents/GitHub/AfroPay-Stellar/deploy/kubernetes/migration-job-post-deploy.yaml) — Applies a deferred breaking migration after old pods are drained. See [docs/zero-downtime-migrations.md](../../docs/zero-downtime-migrations.md).
 
 ---
 
@@ -70,7 +71,7 @@ The manifests configure local persistent storage for database backups and cache/
     *   `RollingUpdate` strategy ensures zero downtime during application upgrades.
 4.  **Database Migration**:
     *   Do not run migrations within the API container startup hook.
-    *   Run migrations as a separate job (`migration-job.yaml`) prior to updating the API/worker deployment image tag.
+    *   Run migrations as two separate jobs: `migration-job-pre-deploy.yaml` (safe/additive migrations) before rolling out the new API/worker image, and `migration-job-post-deploy.yaml` (any deferred breaking migration) only after old pods are confirmed drained. See [docs/zero-downtime-migrations.md](../../docs/zero-downtime-migrations.md) for the classification rules and rollback runbook.
 5.  **Health Probes**:
     *   Probes use HTTP `/health` checks where possible. If `/health` endpoints are not fully implemented or require special access tokens, fallback to `tcpSocket` probes targeting the listen ports.
 6.  **TLS Termination**:
@@ -80,7 +81,29 @@ The manifests configure local persistent storage for database backups and cache/
 
 ## Deploying the Stack
 
-To deploy the manifests to your cluster:
+### Automated Deployment (Recommended)
+
+The project includes an automated GitHub Actions workflow for production deployments with health checks and automatic rollback.
+
+**For mainnet deployments:**
+```bash
+# Tag a release
+git tag v1.2.3
+git push origin v1.2.3
+
+# GitHub Actions automatically:
+# 1. Builds and pushes Docker images
+# 2. Runs database migrations
+# 3. Deploys to Kubernetes with zero downtime
+# 4. Monitors health for 5 minutes
+# 5. Automatically rolls back on failure
+```
+
+📚 **See [DEPLOYMENT_PIPELINE.md](./DEPLOYMENT_PIPELINE.md) for complete documentation.**
+
+### Manual Deployment
+
+For local development or testing:
 
 ```bash
 # 1. Create the namespace
@@ -94,8 +117,9 @@ kubectl apply -f secrets.yaml
 kubectl apply -f postgres.yaml
 kubectl apply -f redis.yaml
 
-# 4. Run database migrations
-kubectl apply -f migration-job.yaml
+# 4. Run safe (additive) migrations before the new pods start
+kubectl apply -f migration-job-pre-deploy.yaml
+kubectl wait --for=condition=complete --timeout=300s job/api-migration-pre-deploy -n afropay
 
 # 5. Deploy application components
 kubectl apply -f api.yaml
@@ -103,6 +127,15 @@ kubectl apply -f frontend.yaml
 kubectl apply -f rust-worker.yaml
 kubectl apply -f python-analytics.yaml
 
-# 6. Apply Ingress routing rules
+# 6. Wait for the rollout to finish and old pods to fully drain, then run
+#    any breaking migration that step 4 deferred (no-op if none was deferred)
+kubectl rollout status deployment/api -n afropay
+kubectl rollout status deployment/rust-worker -n afropay
+kubectl apply -f migration-job-post-deploy.yaml
+kubectl wait --for=condition=complete --timeout=300s job/api-migration-post-deploy -n afropay
+
+# 7. Apply Ingress routing rules
 kubectl apply -f ingress.yaml
 ```
+
+⚠️ **Warning**: Manual deployments do not include automated health checks or rollback capabilities. Use the automated pipeline for production.

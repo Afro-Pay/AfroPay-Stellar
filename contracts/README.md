@@ -77,6 +77,12 @@ On-chain registry for remittance payment verification:
 - `is_registered(payment_id)` — check registration status
 - `version()` — deployment validation helper
 
+### Storage Model
+
+Payment records are stored in **persistent ledger entries**, one entry per payment ID. This design avoids the XDR size cap (64 KB) that would apply if all payments were aggregated in a single `Map` entry.
+
+Each payment is stored with a key of type `DataKey::Payment(payment_id)`, making it independently retrievable and avoiding storage size scaling issues. As of 2026-07-25, the contract has been validated to handle 10,000+ payment registrations without hitting ledger size limits.
+
 ## Environment Overrides
 
 | Variable | Description |

@@ -1,0 +1,40 @@
+# Run this Job BEFORE rolling out the new api/rust-worker Deployments.
+#
+# It applies every pending migration classified "safe" in
+# apps/api/prisma/migrations/migration-manifest.json. If a "breaking"
+# migration is pending, it is deliberately skipped here and left for
+# migration-job-post-deploy.yaml, which must only run after the old pods
+# have been fully drained. See docs/zero-downtime-migrations.md.
+#
+#   kubectl apply -f migration-job-pre-deploy.yaml
+#   kubectl wait --for=condition=complete --timeout=300s job/api-migration-pre-deploy -n afropay
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Job names must be unique. Append the release/Git SHA when applying this
+  # manifest (e.g. `api-migration-pre-$GIT_SHA`) so re-running a deploy
+  # doesn't collide with a completed Job from the previous release.
+  name: api-migration-pre-deploy
+  namespace: afropay
+  labels:
+    app: api-migration
+    phase: pre-deploy
+spec:
+  template:
+    metadata:
+      labels:
+        app: api-migration
+        phase: pre-deploy
+    spec:
+      containers:
+      - name: migration
+        image: registry.example.com/afropay-stellar/api:latest # Replace with target tag for release; must match the api/rust-worker image tag being promoted
+        command: ["/bin/sh", "/app/scripts/migrate-pre-deploy.sh"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: afropay-secrets
+              key: DATABASE_URL
+      restartPolicy: OnFailure
+  backoffLimit: 4

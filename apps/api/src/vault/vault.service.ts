@@ -1,124 +1,105 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import axios from 'axios';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { Keypair } from 'stellar-sdk';
-import * as crypto from 'crypto';
 
+export interface DelegatedSigningResult {
+  signedTransactionXdr: string;
+  signerPublicKey: string;
+  requestId: string;
+}
+
+interface SignerResponse {
+  signedTransactionXdr?: unknown;
+  signerPublicKey?: unknown;
+  requestId?: unknown;
+}
+
+/**
+ * Narrow client for the external signing boundary.
+ *
+ * This service intentionally has no KMS client, AES implementation, encrypted
+ * key fields, or method that returns a private key. The signer is responsible
+ * for key retrieval, unwrap, signing, and memory cleanup in another process.
+ */
 @Injectable()
 export class VaultService {
   private readonly logger = new Logger(VaultService.name);
-  private cosignerKeypair: { publicKey: string; privateKey: string } | null = null;
 
   constructor(
-    private configService: ConfigService,
-    private prisma: PrismaService,
-  ) {
-    this.initializeCosigner();
-  }
-
-  private initializeCosigner(): void {
-    const cosignerSecret = this.configService.get<string>('COSIGNER_SECRET');
-
-    if (!cosignerSecret) {
-      this.logger.warn('No cosigner secret configured - multi-sig disabled');
-      return;
-    }
-
-    try {
-      const keypair = Keypair.fromSecret(cosignerSecret);
-      this.cosignerKeypair = {
-        publicKey: keypair.publicKey(),
-        privateKey: cosignerSecret,
-      };
-      this.logger.log('Cosigner keypair initialized from secret store');
-    } catch (error) {
-      this.logger.error('Invalid COSIGNER_SECRET configured', error as Error);
-      throw new Error('Invalid COSIGNER_SECRET configured');
-    }
-  }
-
-  private getMasterKey(): Buffer {
-    const configuredKey = this.configService.get<string>('ENCRYPTION_KEY');
-    if (!configuredKey) {
-      throw new Error('ENCRYPTION_KEY is required to decrypt wallet secrets');
-    }
-
-    if (!/^[0-9a-fA-F]{64}$/.test(configuredKey)) {
-      throw new Error('ENCRYPTION_KEY must be a 64-character hex string');
-    }
-
-    return Buffer.from(configuredKey, 'hex');
-  }
-
-  private deriveUserKey(userId: string): Buffer {
-    return Buffer.from(
-      crypto.hkdfSync(
-        'sha256',
-        this.getMasterKey(),
-        Buffer.alloc(16),
-        Buffer.from(userId, 'utf8'),
-        32,
-      ),
-    );
-  }
-
-  private decryptWalletSecret(encryptedSecret: string, userId: string): string {
-    const parts = encryptedSecret.split(':');
-    if (parts.length === 3) {
-      const [ivHex, authTagHex, ciphertextHex] = parts;
-      const iv = Buffer.from(ivHex, 'hex');
-      const authTag = Buffer.from(authTagHex, 'hex');
-      const ciphertext = Buffer.from(ciphertextHex, 'hex');
-      const decipher = crypto.createDecipheriv(
-        'aes-256-gcm',
-        this.deriveUserKey(userId),
-        iv,
-      );
-      decipher.setAuthTag(authTag);
-      return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
-    }
-
-    if (parts.length === 2) {
-      const [ivHex, ciphertextHex] = parts;
-      const iv = Buffer.from(ivHex, 'hex');
-      const ciphertext = Buffer.from(ciphertextHex, 'hex');
-      const decipher = crypto.createDecipheriv(
-        'aes-256-cbc',
-        this.getMasterKey(),
-        iv,
-      );
-      return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
-    }
-
-    throw new Error('Unsupported encryptedSecret format');
-  }
+    private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   async getCosignerPublicKey(): Promise<string | null> {
-    return this.cosignerKeypair?.publicKey || null;
+    return this.configService.get<string>('COSIGNER_PUBLIC_KEY') ?? null;
   }
 
-  async getCosignerKeypair(): Promise<{ publicKey: string; privateKey: string } | null> {
-    return this.cosignerKeypair;
-  }
-
-  async getUserKeypair(userId: string): Promise<{ publicKey: string; privateKey: string }> {
-    this.logger.debug(`Retrieving keypair for user ${userId}`);
-
-    const wallet = await this.prisma.wallet.findUnique({
+  async signTransaction(
+    userId: string,
+    unsignedTransactionXdr: string,
+  ): Promise<DelegatedSigningResult> {
+    const wallet = await this.prisma.wallet.findFirst({
       where: { userId },
-      select: { encryptedSecret: true },
+      select: { id: true, publicKey: true },
     });
+    if (!wallet) throw new NotFoundException('Wallet not found');
 
-    if (!wallet?.encryptedSecret) {
-      throw new NotFoundException(`Wallet secret not found for user ${userId}`);
+    const signerUrl = this.configService.get<string>('SIGNER_URL');
+    const signerToken = this.configService.get<string>('SIGNER_AUTH_TOKEN');
+    if (!signerUrl || !signerToken) {
+      throw new ServiceUnavailableException('Delegated signer is not configured');
     }
 
-    const decryptedSecret = this.decryptWalletSecret(wallet.encryptedSecret, userId);
-    const keypair = Keypair.fromSecret(decryptedSecret);
+    const requestId = randomUUID();
+    let response: { data: SignerResponse };
+    try {
+      response = await axios.post<SignerResponse>(
+        `${signerUrl.replace(/\/$/, '')}/v1/sign`,
+        {
+          requestId,
+          walletId: wallet.id,
+          expectedPublicKey: wallet.publicKey,
+          unsignedTransactionXdr,
+          network: this.configService.get<string>('STELLAR_NETWORK') ?? 'testnet',
+        },
+        {
+          headers: {
+            authorization: `Bearer ${signerToken}`,
+            'content-type': 'application/json',
+          },
+          timeout: 10_000,
+        },
+      );
+    } catch {
+      // HTTP client errors may contain request/response bodies, so they are not
+      // attached to logs. Only non-sensitive identifiers cross this path.
+      this.logger.error({ event: 'delegated_signing_failed', requestId, walletId: wallet.id });
+      throw new BadGatewayException('Delegated signer failed');
+    }
 
+    const data = response.data;
+    if (
+      typeof data.signedTransactionXdr !== 'string' ||
+      typeof data.signerPublicKey !== 'string' ||
+      data.signerPublicKey !== wallet.publicKey ||
+      (data.requestId !== undefined && data.requestId !== requestId)
+    ) {
+      throw new BadGatewayException('Delegated signer returned an invalid response');
+    }
+
+    this.logger.log({ event: 'delegated_signing_completed', requestId, walletId: wallet.id });
     return {
-      publicKey: keypair.publicKey(),
-      privateKey: decryptedSecret,
+      signedTransactionXdr: data.signedTransactionXdr,
+      signerPublicKey: data.signerPublicKey,
+      requestId,
     };
   }
 }

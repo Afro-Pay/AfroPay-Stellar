@@ -3,6 +3,7 @@ import { NotFoundException } from '@nestjs/common';
 import { getQueueToken } from '@nestjs/bull';
 import { PrismaService } from '../prisma/prisma.service';
 import { KycService } from '../kyc/kyc.service';
+import { SorobanService } from '../soroban/soroban.service';
 import { TransactionService } from './transaction.service';
 
 describe('TransactionService', () => {
@@ -18,7 +19,7 @@ describe('TransactionService', () => {
       delete: jest.fn(),
     },
     wallet: {
-      findUnique: jest.fn(),
+      findFirst: jest.fn(),
     },
   };
 
@@ -30,6 +31,8 @@ describe('TransactionService', () => {
   const mockQueue = {
     add: jest.fn(),
   };
+
+  const mockSorobanService = {};
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -50,6 +53,10 @@ describe('TransactionService', () => {
         {
           provide: getQueueToken('transactions'),
           useValue: mockQueue,
+        },
+        {
+          provide: SorobanService,
+          useValue: mockSorobanService,
         },
       ],
     }).compile();
@@ -80,7 +87,7 @@ describe('TransactionService', () => {
         updatedAt: new Date(),
       };
 
-      mockPrismaService.wallet.findUnique.mockResolvedValue({
+      mockPrismaService.wallet.findFirst.mockResolvedValue({
         id: 'wallet-1',
         publicKey: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
       });
@@ -103,7 +110,7 @@ describe('TransactionService', () => {
         memo: 'Transfer',
       };
 
-      mockPrismaService.wallet.findUnique.mockResolvedValue(null);
+      mockPrismaService.wallet.findFirst.mockResolvedValue(null);
 
       await expect(service.sendTransfer('user-1', sendTransferDto)).rejects.toThrow(
         NotFoundException,
@@ -121,7 +128,7 @@ describe('TransactionService', () => {
     const KEY = '3f6d1e2a-9c4b-4b2e-8a1d-2b7c9e0f1a23';
 
     beforeEach(() => {
-      mockPrismaService.wallet.findUnique.mockResolvedValue({
+      mockPrismaService.wallet.findFirst.mockResolvedValue({
         id: 'wallet-1',
         publicKey: 'GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
       });
@@ -211,6 +218,28 @@ describe('TransactionService', () => {
         expect.objectContaining({ txId: 'tx-1' }),
         expect.not.objectContaining({ jobId: expect.anything() }),
       );
+    });
+
+    it('expires key after 24 hours so a re-submission after TTL creates a new transaction', async () => {
+      jest.useFakeTimers();
+      const now = Date.now();
+      jest.setSystemTime(now);
+
+      mockPrismaService.transaction.create
+        .mockResolvedValueOnce({ id: 'tx-first', status: 'PENDING' })
+        .mockResolvedValueOnce({ id: 'tx-second', status: 'PENDING' });
+
+      const first = await service.sendTransfer('user-1', dto, KEY);
+      expect(first).toEqual({ txId: 'tx-first', status: 'PENDING', idempotentReplay: false });
+
+      // Advance system time past 24 hours (24h + 10s)
+      jest.setSystemTime(now + 24 * 60 * 60 * 1000 + 10_000);
+
+      const afterExpiry = await service.sendTransfer('user-1', dto, KEY);
+      expect(afterExpiry).toEqual({ txId: 'tx-second', status: 'PENDING', idempotentReplay: false });
+      expect(mockPrismaService.transaction.create).toHaveBeenCalledTimes(2);
+
+      jest.useRealTimers();
     });
   });
 

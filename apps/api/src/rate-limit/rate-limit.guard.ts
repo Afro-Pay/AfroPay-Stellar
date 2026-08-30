@@ -120,11 +120,10 @@ export class RateLimitGuard implements CanActivate {
     const userId = request?.user?.userId ?? request?.user?.sub;
     if (userId) return `user:${userId}`;
 
-    const forwardedFor = request?.headers?.["x-forwarded-for"];
-    if (typeof forwardedFor === "string" && forwardedFor.trim()) {
-      return `ip:${forwardedFor.split(",")[0].trim()}`;
-    }
-
+    // Never trust the raw X-Forwarded-For header. When Express `trust proxy`
+    // is configured, `request.ip` is already derived from trusted proxies;
+    // otherwise it is the direct peer address. Reading the header here would
+    // let an attacker obtain a fresh bucket by changing it on every request.
     return `ip:${request?.ip ?? request?.socket?.remoteAddress ?? "unknown"}`;
   }
 }

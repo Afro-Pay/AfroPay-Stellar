@@ -1,47 +1,74 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { PrismaService } from '../prisma/prisma.service';
 import {
-  AuditLogService,
   AuditCategory,
+  AuditLogService,
   AuditOperation,
   AuditOutcome,
 } from './audit.service';
 
 // ---------------------------------------------------------------------------
-// Minimal PrismaService mock — isolates AuditLogService from the database.
+// Minimal Prisma mock — isolates AuditLogService from the database.
 // ---------------------------------------------------------------------------
-const mockCreate = jest.fn().mockResolvedValue({ id: 'audit-1' });
-const mockCount = jest.fn().mockResolvedValue(2);
-const mockFindMany = jest.fn().mockResolvedValue([
-  { id: 'audit-1', operation: 'WALLET_CREATED', createdAt: new Date() },
-  { id: 'audit-2', operation: 'TX_SUBMITTED', createdAt: new Date() },
-]);
+const makePrismaMock = () => {
+  const rows: any[] = [];
+  const mockCreate = jest.fn().mockImplementation(({ data }) => {
+    const row = {
+      id: `audit-${rows.length + 1}`,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      ...data,
+    };
+    rows.push(row);
+    return Promise.resolve(row);
+  });
+  const mockUpdate = jest.fn().mockImplementation(({ where, data }) => {
+    const row = rows.find((r) => r.id === where.id);
+    Object.assign(row, data);
+    return Promise.resolve(row);
+  });
+  const mockFindFirst = jest.fn().mockImplementation(() => {
+    const sorted = [...rows].sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : -1),
+    );
+    return Promise.resolve(sorted[0] ?? null);
+  });
+  const mockCount = jest.fn().mockResolvedValue(2);
+  const mockFindMany = jest.fn().mockResolvedValue([
+    { id: 'audit-1', operation: 'WALLET_CREATED', createdAt: new Date() },
+    { id: 'audit-2', operation: 'TX_SUBMITTED', createdAt: new Date() },
+  ]);
 
-const mockPrisma = {
-  auditLog: {
-    create: mockCreate,
-    count: mockCount,
-    findMany: mockFindMany,
-  },
+  return {
+    rows,
+    mocks: {
+      auditLog: {
+        create: mockCreate,
+        update: mockUpdate,
+        findFirst: mockFindFirst,
+        count: mockCount,
+        findMany: mockFindMany,
+      },
+    },
+  };
 };
 
 describe('AuditLogService', () => {
   let service: AuditLogService;
+  let prismaMock: ReturnType<typeof makePrismaMock>['mocks'];
 
-  beforeEach(async () => {
+  beforeEach(() => {
     jest.clearAllMocks();
+    const { mocks } = makePrismaMock();
+    prismaMock = mocks;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuditLogService,
-        { provide: 'PrismaService', useValue: mockPrisma },
+        { provide: PrismaService, useValue: prismaMock },
       ],
-    })
-      .overrideProvider('PrismaService')
-      .useValue(mockPrisma)
-      .compile();
+    }).compile();
 
-    // Manually construct with mock because NestJS DI token is PrismaService class.
-    service = new AuditLogService(mockPrisma as any);
+    service = module.get<AuditLogService>(AuditLogService);
   });
 
   // -------------------------------------------------------------------------
@@ -57,8 +84,8 @@ describe('AuditLogService', () => {
       walletPublicKey: 'GABC123',
     });
 
-    expect(mockCreate).toHaveBeenCalledTimes(1);
-    const payload = mockCreate.mock.calls[0][0].data;
+    expect(prismaMock.auditLog.create).toHaveBeenCalledTimes(1);
+    const payload = prismaMock.auditLog.create.mock.calls[0][0].data;
     expect(payload.userId).toBe('user-abc');
     expect(payload.category).toBe('WALLET');
     expect(payload.operation).toBe('WALLET_CREATED');
@@ -77,15 +104,15 @@ describe('AuditLogService', () => {
       destination: 'GDEST456',
     });
 
-    expect(mockCreate).toHaveBeenCalledTimes(1);
-    const payload = mockCreate.mock.calls[0][0].data;
+    expect(prismaMock.auditLog.create).toHaveBeenCalledTimes(1);
+    const payload = prismaMock.auditLog.create.mock.calls[0][0].data;
     expect(payload.amount).toBe('100');
     expect(payload.assetCode).toBe('XLM');
     expect(payload.destination).toBe('GDEST456');
   });
 
   it('does NOT throw when the DB write fails (fire-and-forget safety)', async () => {
-    mockCreate.mockRejectedValueOnce(new Error('DB is down'));
+    prismaMock.auditLog.create.mockRejectedValueOnce(new Error('DB is down'));
 
     await expect(
       service.log({
@@ -97,18 +124,65 @@ describe('AuditLogService', () => {
     ).resolves.not.toThrow();
   });
 
-  it('includes timestamp in the log entry (createdAt is set by Prisma default)', async () => {
+  // -------------------------------------------------------------------------
+  // Cryptographic hash chain
+  // -------------------------------------------------------------------------
+
+  it('seals every entry with a hash and links it to the previous entry', async () => {
     await service.log({
-      category: AuditCategory.TRANSACTION,
-      operation: AuditOperation.TX_FAILED,
-      outcome: AuditOutcome.FAILURE,
-      metadata: { txId: 'tx-99', error: 'Timeout' },
+      userId: 'user-1',
+      category: AuditCategory.COMPLIANCE,
+      operation: AuditOperation.COMPLIANCE_FREEZE_REQUESTED,
+      outcome: AuditOutcome.SUCCESS,
+      metadata: { actionId: 'action-1' },
+    });
+    await service.log({
+      userId: 'user-2',
+      category: AuditCategory.COMPLIANCE,
+      operation: AuditOperation.COMPLIANCE_ACTION_APPROVED,
+      outcome: AuditOutcome.SUCCESS,
+      metadata: { actionId: 'action-1' },
     });
 
-    expect(mockCreate).toHaveBeenCalledTimes(1);
-    const payload = mockCreate.mock.calls[0][0].data;
-    // createdAt is managed by Prisma @default(now()) — we just confirm metadata passed through
-    expect(payload.metadata).toEqual({ txId: 'tx-99', error: 'Timeout' });
+    const first = prismaMock.auditLog.create.mock.calls[0][0].data;
+    const second = prismaMock.auditLog.create.mock.calls[1][0].data;
+
+    // First entry: no parent, sealed with a 64-char hex hash.
+    expect(first.previousHash).toBeNull();
+    const firstHash = prismaMock.auditLog.update.mock.calls[0][0].data.hash;
+    expect(firstHash).toMatch(/^[0-9a-f]{64}$/);
+
+    // Second entry links to the first entry's hash.
+    expect(second.previousHash).toBe(firstHash);
+    const secondHash = prismaMock.auditLog.update.mock.calls[1][0].data.hash;
+    expect(secondHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(secondHash).not.toBe(firstHash);
+  });
+
+  it('produces a deterministic hash for identical payloads (tamper-evidence)', async () => {
+    // Two services with isolated stores both compute the same hash for the
+    // same canonical payload when starting from the same (empty) chain.
+    const first = makePrismaMock();
+    const second = makePrismaMock();
+    const svcA = new AuditLogService(first.mocks as any);
+    const svcB = new AuditLogService(second.mocks as any);
+
+    await svcA.log({
+      userId: 'u',
+      category: AuditCategory.AUTH,
+      operation: 'LOGIN',
+      outcome: AuditOutcome.SUCCESS,
+    });
+    await svcB.log({
+      userId: 'u',
+      category: AuditCategory.AUTH,
+      operation: 'LOGIN',
+      outcome: AuditOutcome.SUCCESS,
+    });
+
+    const hashA = first.mocks.auditLog.update.mock.calls[0][0].data.hash;
+    const hashB = second.mocks.auditLog.update.mock.calls[0][0].data.hash;
+    expect(hashA).toBe(hashB);
   });
 
   // -------------------------------------------------------------------------
@@ -120,7 +194,7 @@ describe('AuditLogService', () => {
 
     expect(result.total).toBe(2);
     expect(result.entries).toHaveLength(2);
-    expect(mockFindMany).toHaveBeenCalledWith(
+    expect(prismaMock.auditLog.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ userId: 'user-abc' }),
         take: 10,
@@ -131,14 +205,14 @@ describe('AuditLogService', () => {
 
   it('caps limit at 200 regardless of caller input', async () => {
     await service.query({ limit: 9999 });
-    expect(mockFindMany).toHaveBeenCalledWith(
+    expect(prismaMock.auditLog.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ take: 200 }),
     );
   });
 
   it('filters by category and operation when provided', async () => {
     await service.query({ category: 'WALLET', operation: 'WALLET_CREATED' });
-    expect(mockFindMany).toHaveBeenCalledWith(
+    expect(prismaMock.auditLog.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           category: 'WALLET',
@@ -152,12 +226,80 @@ describe('AuditLogService', () => {
     const from = new Date('2024-01-01');
     const to = new Date('2024-12-31');
     await service.query({ from, to });
-    expect(mockFindMany).toHaveBeenCalledWith(
+    expect(prismaMock.auditLog.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           createdAt: { gte: from, lte: to },
         }),
       }),
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // exportNdjson()
+  // -------------------------------------------------------------------------
+
+  describe('exportNdjson', () => {
+    async function collect(gen: AsyncGenerator<string>): Promise<string[]> {
+      const lines: string[] = [];
+      for await (const line of gen) lines.push(line);
+      return lines;
+    }
+
+    it('yields one NDJSON line per row, each terminated with a newline', async () => {
+      mockFindMany.mockResolvedValueOnce([
+        { id: 'audit-1', operation: 'WALLET_CREATED' },
+        { id: 'audit-2', operation: 'TX_SUBMITTED' },
+      ]);
+
+      const lines = await collect(service.exportNdjson({}));
+
+      expect(lines).toHaveLength(2);
+      lines.forEach((line) => expect(line.endsWith('\n')).toBe(true));
+      expect(JSON.parse(lines[0])).toEqual({ id: 'audit-1', operation: 'WALLET_CREATED' });
+      expect(JSON.parse(lines[1])).toEqual({ id: 'audit-2', operation: 'TX_SUBMITTED' });
+    });
+
+    it('applies userId/from/to filters to the underlying query', async () => {
+      mockFindMany.mockResolvedValueOnce([]);
+      const from = new Date('2024-01-01');
+      const to = new Date('2024-12-31');
+
+      await collect(service.exportNdjson({ userId: 'user-abc', from, to }));
+
+      expect(mockFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            userId: 'user-abc',
+            createdAt: { gte: from, lte: to },
+          }),
+          orderBy: { id: 'asc' },
+        }),
+      );
+    });
+
+    it('pages through results with a keyset cursor instead of loading everything at once', async () => {
+      // pageSize=2: a full page means there could be more, so it fetches again.
+      const page1 = [
+        { id: 'id-0', operation: 'TX_SUBMITTED' },
+        { id: 'id-1', operation: 'TX_SUBMITTED' },
+      ];
+      const page2 = [{ id: 'id-2', operation: 'TX_SUCCESS' }];
+      mockFindMany.mockResolvedValueOnce(page1).mockResolvedValueOnce(page2);
+
+      const lines = await collect(service.exportNdjson({}, 2));
+
+      expect(lines).toHaveLength(3);
+      expect(mockFindMany).toHaveBeenCalledTimes(2);
+      expect(mockFindMany.mock.calls[1][0]).toEqual(
+        expect.objectContaining({ cursor: { id: 'id-1' }, skip: 1 }),
+      );
+    });
+
+    it('yields nothing when no rows match', async () => {
+      mockFindMany.mockResolvedValueOnce([]);
+      const lines = await collect(service.exportNdjson({ userId: 'nobody' }));
+      expect(lines).toHaveLength(0);
+    });
   });
 });

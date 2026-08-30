@@ -1,83 +1,79 @@
+import { BadGatewayException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Keypair } from 'stellar-sdk';
-import * as crypto from 'crypto';
+import axios from 'axios';
 import { VaultService } from './vault.service';
 
-function deriveUserKey(userId: string, masterKey: Buffer): Buffer {
-  return Buffer.from(
-    crypto.hkdfSync(
-      'sha256',
-      masterKey,
-      Buffer.alloc(16),
-      Buffer.from(userId, 'utf8'),
-      32,
-    )
-  );
-}
+jest.mock('axios');
+const mockedAxios = axios as jest.Mocked<typeof axios>;
 
-function encryptWalletSecret(text: string, userId: string, masterKey: Buffer): string {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv(
-    'aes-256-gcm',
-    deriveUserKey(userId, masterKey),
-    iv,
-  );
-  const ciphertext = Buffer.concat([
-    cipher.update(text, 'utf8'),
-    cipher.final(),
-  ]);
-  const authTag = cipher.getAuthTag();
-
-  return `${iv.toString('hex')}:${authTag.toString('hex')}:${ciphertext.toString('hex')}`;
-}
-
-describe('VaultService', () => {
-  let configService: Partial<ConfigService>;
+describe('VaultService delegated signing', () => {
+  const wallet = { id: 'wallet-1', publicKey: 'GPUBLIC' };
+  let config: ConfigService;
   let prisma: any;
   let service: VaultService;
 
   beforeEach(() => {
-    const cosignerKeypair = Keypair.random();
-    const masterKey = Buffer.from('a'.repeat(64), 'hex');
+    jest.clearAllMocks();
+    config = {
+      get: jest.fn((key: string) => ({
+        SIGNER_URL: 'http://signer.internal:8080',
+        SIGNER_AUTH_TOKEN: 'test-token',
+        STELLAR_NETWORK: 'testnet',
+        COSIGNER_PUBLIC_KEY: 'GCOSIGNER',
+      })[key]),
+    } as any;
+    prisma = { wallet: { findFirst: jest.fn().mockResolvedValue(wallet) } };
+    service = new VaultService(config, prisma);
+  });
 
-    configService = {
-      get: jest.fn((key: string) => {
-        if (key === 'COSIGNER_SECRET') {
-          return cosignerKeypair.secret();
-        }
-        if (key === 'ENCRYPTION_KEY') {
-          return masterKey.toString('hex');
-        }
-        return null;
-      }),
-    };
-
-    prisma = {
-      wallet: {
-        findUnique: jest.fn(),
+  it('routes signing outside NestJS without selecting encrypted key material', async () => {
+    mockedAxios.post.mockImplementation(async (_url, body: any) => ({
+      data: {
+        signedTransactionXdr: 'signed-xdr',
+        signerPublicKey: wallet.publicKey,
+        requestId: body.requestId,
       },
-    };
+    } as any));
 
-    service = new VaultService(configService as ConfigService, prisma as any);
+    const result = await service.signTransaction('user-1', 'unsigned-xdr');
+
+    expect(prisma.wallet.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'user-1' },
+      select: { id: true, publicKey: true },
+    });
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      'http://signer.internal:8080/v1/sign',
+      expect.objectContaining({
+        walletId: wallet.id,
+        expectedPublicKey: wallet.publicKey,
+        unsignedTransactionXdr: 'unsigned-xdr',
+      }),
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: 'Bearer test-token' }),
+      }),
+    );
+    expect(result).toEqual(expect.objectContaining({
+      signedTransactionXdr: 'signed-xdr',
+      signerPublicKey: wallet.publicKey,
+    }));
   });
 
-  it('returns a valid cosigner public key', async () => {
-    const publicKey = await service.getCosignerPublicKey();
-    expect(publicKey).toBeTruthy();
-    expect(() => Keypair.fromPublicKey(publicKey as string)).not.toThrow();
+  it('fails closed when the signer is not configured', async () => {
+    (config.get as jest.Mock).mockReturnValue(undefined);
+    await expect(service.signTransaction('user-1', 'unsigned-xdr'))
+      .rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(mockedAxios.post).not.toHaveBeenCalled();
   });
 
-  it('decrypts a user wallet secret and returns a valid keypair', async () => {
-    const userId = 'user-1';
-    const privateKey = Keypair.random().secret();
-    const masterKey = Buffer.from('a'.repeat(64), 'hex');
-    const encryptedSecret = encryptWalletSecret(privateKey, userId, masterKey);
+  it('rejects a response signed by a different wallet', async () => {
+    mockedAxios.post.mockResolvedValue({
+      data: { signedTransactionXdr: 'signed-xdr', signerPublicKey: 'GATTACKER' },
+    } as any);
+    await expect(service.signTransaction('user-1', 'unsigned-xdr'))
+      .rejects.toBeInstanceOf(BadGatewayException);
+  });
 
-    prisma.wallet.findUnique.mockResolvedValue({ encryptedSecret });
-
-    const userKeypair = await service.getUserKeypair(userId);
-
-    expect(userKeypair.privateKey).toBe(privateKey);
-    expect(userKeypair.publicKey).toBe(Keypair.fromSecret(privateKey).publicKey());
+  it('exposes only the configured cosigner public key', async () => {
+    await expect(service.getCosignerPublicKey()).resolves.toBe('GCOSIGNER');
   });
 });

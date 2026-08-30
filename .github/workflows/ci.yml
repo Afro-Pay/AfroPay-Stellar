@@ -34,6 +34,19 @@ jobs:
       - name: Generate Prisma Client
         run: npm run prisma:generate
 
+      - name: Run TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Verify DEK material is never logged
+        working-directory: .
+        run: |
+          if grep -RniE --include='*.ts' --include='*.rs' \
+            '(logger|console|print|tracing).*(encryptedDek|plaintextDek|data.?encryption.?key|\bdek\b)|(encryptedDek|plaintextDek|data.?encryption.?key|\bdek\b).*(logger|console|print|tracing)' \
+            apps/api/src services/rust-worker/src; then
+            echo "DEK-related log statement detected"
+            exit 1
+          fi
+
       - name: Run linting
         run: npm run lint
 
@@ -136,3 +149,123 @@ jobs:
       - name: Tear down stack
         if: always()
         run: docker compose down -v
+
+  contract-tests:
+    name: Soroban Contract Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-contracts-${{ hashFiles('contracts/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-contracts-
+
+      - name: Run contract tests
+        working-directory: contracts
+        run: cargo test --workspace --locked
+        env:
+          RUST_BACKTRACE: 1
+
+  contract-wasm-size:
+    name: Soroban WASM Size Budget
+    runs-on: ubuntu-latest
+    env:
+      WASM_SIZE_LIMIT_KB: 500
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('contracts/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-
+
+      - name: Build WASM binaries
+        working-directory: contracts
+        run: cargo build --target wasm32-unknown-unknown --release --locked
+
+      - name: Check WASM size budget
+        run: bash scripts/check_wasm_size.sh
+        env:
+          WASM_SIZE_LIMIT_KB: ${{ env.WASM_SIZE_LIMIT_KB }}
+
+  rust-worker-tests:
+    name: Rust Worker Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            services/rust-worker/target
+          key: ${{ runner.os }}-cargo-rust-worker-${{ hashFiles('services/rust-worker/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-rust-worker-
+
+      - name: Run rust-worker tests
+        working-directory: services/rust-worker
+        run: cargo test --locked
+        env:
+          RUST_BACKTRACE: 1
+
+  contract-clippy:
+    name: Cargo Clippy (contracts + rust-worker)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+            services/rust-worker/target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('contracts/Cargo.lock', 'services/rust-worker/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-clippy-
+
+      - name: Clippy — contracts
+        working-directory: contracts
+        run: cargo clippy --workspace --locked -- -D warnings
+
+      - name: Clippy — rust-worker
+        working-directory: services/rust-worker
+        run: cargo clippy --workspace --locked -- -D warnings

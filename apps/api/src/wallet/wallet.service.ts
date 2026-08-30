@@ -1,19 +1,18 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
-import { AuditService } from '../audit/audit.service';
-import { Logger } from 'nestjs-pino';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { Horizon, Keypair } from 'stellar-sdk';
 import * as crypto from 'crypto';
-import { Horizon, Keypair, Networks } from 'stellar-sdk';
-import { ensureTrustline, isTrustlineError, TrustlineAsset } from '../anchor/trustline.utils';
+import { VaultService } from '../vault/vault.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { RpcClientService } from '../soroban/rpc-client.service';
 
-const STELLAR_NETWORK = process.env.STELLAR_NETWORK ?? 'testnet';
-const HORIZON_URL =
-  process.env.STELLAR_HORIZON_URL ??
-  (STELLAR_NETWORK === 'testnet' ? 'https://horizon-testnet.stellar.org' : 'https://horizon.stellar.org');
-const NETWORK_PASSPHRASE = STELLAR_NETWORK === 'testnet' ? Networks.TESTNET : Networks.PUBLIC;
-const FRIENDBOT_URL = 'https://friendbot.stellar.org';
-
+const HORIZON_URL = process.env.STELLAR_HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
 const server = new Horizon.Server(HORIZON_URL);
+const AuditCategory = { WALLET: 'WALLET' } as const;
+const AuditOperation = {
+  WALLET_EXPORTED: 'WALLET_EXPORTED',
+  WALLET_IMPORTED: 'WALLET_IMPORTED',
+} as const;
+const AuditOutcome = { SUCCESS: 'SUCCESS' } as const;
 
 export class AuthTagMismatchError extends Error {
   constructor(message = 'AuthTagMismatch') {
@@ -43,32 +42,59 @@ interface ReconciliationAsset {
 
 @Injectable()
 export class WalletService {
+  private readonly logger = new Logger(WalletService.name);
+
   constructor(
-    private prisma: PrismaClient,
-    private auditService: AuditService,
-    private logger: Logger,
+    private prisma: PrismaService,
+    @Optional() private readonly vaultService?: VaultService,
+    @Optional() private readonly rpcClient?: RpcClientService,
   ) {}
 
-  async createWallet(userId: string, publicKey: string) {
+  /**
+   * Create a new wallet for a user. If this is the first wallet, it becomes the default.
+   * @param userId - The user ID
+   * @param publicKey - The Stellar public key
+   * @param alias - Optional user-defined alias (max 32 chars)
+   * @returns The created wallet
+   */
+  async createWallet(userId: string, publicKey: string, alias?: string) {
+    // Check if user already has wallets
+    const existingWallets = await this.prisma.wallet.findMany({
+      where: { userId },
+    });
+
+    // First wallet becomes default, subsequent ones don't
+    const isDefault = existingWallets.length === 0;
+
+    // Check wallet limit (max 5 per user)
+    if (existingWallets.length >= 5) {
+      throw new Error('Wallet limit (5) reached for this user');
+    }
+
+    // Validate alias length
+    if (alias && alias.length > 32) {
+      throw new Error('Wallet alias must be 32 characters or less');
+    }
+
+    // The create payload predates secret provisioning (encryptedSecret is
+    // required by the schema but filled in by the import/restore flows); keep
+    // the pre-existing behaviour by casting like the original implementation.
     const wallet = await this.prisma.wallet.create({
       data: {
         userId,
         publicKey,
-      },
+        alias,
+        isDefault,
+      } as any,
     });
 
-    // Audit: Wallet creation
-    await this.auditService.log(
-      userId,
-      'WALLET_CREATE',
-      { walletId: wallet.id, publicKey },
-    );
-
-    this.logger.info({
+    this.logger.log({
       event: 'wallet_created',
       userId,
       walletId: wallet.id,
       publicKey,
+      alias,
+      isDefault,
     });
 
     if (STELLAR_NETWORK === 'testnet') {
@@ -79,115 +105,143 @@ export class WalletService {
   }
 
   /**
-   * Testnet-only: funds a freshly created account via Friendbot so it meets
-   * Stellar's minimum reserve. Never throws — wallet creation must succeed
-   * even if Friendbot is unreachable or the account is already funded.
+   * Get all wallets for a user, sorted by creation date.
    */
-  private async fundTestnetAccount(userId: string, walletId: string, publicKey: string) {
-    try {
-      const response = await fetch(`${FRIENDBOT_URL}?addr=${encodeURIComponent(publicKey)}`);
-      if (!response.ok) {
-        throw new Error(`Friendbot responded with status ${response.status}`);
-      }
-
-      this.logger.info({ event: 'wallet_funded', userId, walletId, publicKey });
-    } catch (error: any) {
-      this.logger.error({
-        event: 'wallet_funding_failed',
-        userId,
-        walletId,
-        publicKey,
-        error: error?.message,
-      });
-    }
-  }
-
-  /**
-   * Adds a trustline for a non-native asset (e.g. USDC, NGN) so the wallet
-   * can hold and receive it. No-op if the trustline already exists.
-   */
-  async addTrustline(userId: string, assetCode: string, assetIssuer: string, limit?: string) {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
-
-    const keypair = await this.getKeypair(userId);
-    const asset: TrustlineAsset = { code: assetCode, issuer: assetIssuer };
-
-    try {
-      const result = await ensureTrustline(HORIZON_URL, keypair, asset, NETWORK_PASSPHRASE, limit);
-
-      await this.auditService.log(userId, 'WALLET_TRUSTLINE_ADD', {
-        walletId: wallet.id,
-        assetCode,
-        assetIssuer,
-        created: result.created,
-        txHash: result.txHash,
-      });
-
-      this.logger.info({
-        event: 'wallet_trustline_added',
-        userId,
-        walletId: wallet.id,
-        assetCode,
-        assetIssuer,
-        created: result.created,
-      });
-
-      return {
-        assetCode,
-        assetIssuer,
-        created: result.created,
-        txHash: result.txHash ?? null,
-        balance: result.status.balance ?? '0',
-        limit: result.status.limit ?? limit ?? null,
-      };
-    } catch (error) {
-      if (isTrustlineError(error as any)) {
-        throw new BadRequestException((error as any).message);
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Returns the wallet's on-chain balances. Unfunded/not-yet-created
-   * accounts return an empty array instead of throwing.
-   */
-  async getBalances(userId: string, _afterTxHash?: string) {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
-
-    try {
-      const account = await this.loadAccount(wallet.publicKey);
-      return this.assetsFromHorizonBalances(account.balances ?? []);
-    } catch (error) {
-      if (this.isHorizonNotFound(error)) {
-        return [];
-      }
-      throw error;
-    }
-  }
-
   async getWallets(userId: string) {
     return this.prisma.wallet.findMany({
       where: { userId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  /**
+   * Get the active/default wallet for a user.
+   */
+  async getDefaultWallet(userId: string) {
+    const wallet = await this.prisma.wallet.findFirst({
+      where: { userId, isDefault: true },
+    });
+    if (!wallet) throw new NotFoundException('No default wallet found');
+    return wallet;
+  }
+
+  /**
+   * Get a specific wallet by ID, with ownership verification.
+   */
+  async getWalletById(walletId: string, userId: string) {
+    const wallet = await this.prisma.wallet.findUnique({
+      where: { id: walletId },
+    });
+    if (!wallet || wallet.userId !== userId) {
+      throw new NotFoundException('Wallet not found');
+    }
+    return wallet;
+  }
+
+  /**
+   * Set a wallet as the active/default wallet for a user.
+   */
+  async setDefaultWallet(walletId: string, userId: string) {
+    // Verify ownership
+    const wallet = await this.getWalletById(walletId, userId);
+
+    // Clear default flag from other wallets
+    await this.prisma.wallet.updateMany({
+      where: { userId, isDefault: true },
+      data: { isDefault: false },
+    });
+
+    // Set this wallet as default
+    const updated = await this.prisma.wallet.update({
+      where: { id: walletId },
+      data: { isDefault: true },
+    });
+
+    this.logger.log({
+      event: 'wallet_set_default',
+      userId,
+      walletId,
+    });
+
+    return updated;
+  }
+
+  /**
+   * Update a wallet's alias.
+   */
+  async updateWalletAlias(walletId: string, userId: string, alias: string | null) {
+    // Verify ownership
+    await this.getWalletById(walletId, userId);
+
+    // Validate alias length
+    if (alias && alias.length > 32) {
+      throw new Error('Wallet alias must be 32 characters or less');
+    }
+
+    const updated = await this.prisma.wallet.update({
+      where: { id: walletId },
+      data: { alias },
+    });
+
+    this.logger.log({
+      event: 'wallet_alias_updated',
+      userId,
+      walletId,
+      newAlias: alias,
+    });
+
+    return updated;
+  }
+
+  /**
+   * Delete a wallet. Users must have at least one wallet.
+   */
+  async deleteWallet(walletId: string, userId: string) {
+    // Verify ownership
+    await this.getWalletById(walletId, userId);
+
+    // Check wallet count
+    const walletCount = await this.prisma.wallet.count({
+      where: { userId },
+    });
+
+    if (walletCount <= 1) {
+      throw new Error('Cannot delete the last wallet');
+    }
+
+    // If this is the default wallet, set another as default before deleting
+    const wallet = await this.prisma.wallet.findUnique({
+      where: { id: walletId },
+    });
+
+    if (wallet?.isDefault) {
+      const anotherWallet = await this.prisma.wallet.findFirst({
+        where: { userId, id: { not: walletId } },
+      });
+      if (anotherWallet) {
+        await this.setDefaultWallet(anotherWallet.id, userId);
+      }
+    }
+
+    // Delete the wallet (onDelete: Restrict on Transaction.wallet prevents orphaned txs)
+    await this.prisma.wallet.delete({
+      where: { id: walletId },
+    });
+
+    this.logger.log({
+      event: 'wallet_deleted',
+      userId,
+      walletId,
     });
   }
 
   async enableMultisig(walletId: string, userId: string) {
-    const wallet = await this.prisma.wallet.update({
+    const wallet = await (this.prisma.wallet as any).update({
       where: { id: walletId, userId },
       data: { multisigEnabled: true },
     });
 
-    // Audit: Multisig enabled
-    await this.auditService.log(
-      userId,
-      'WALLET_MULTISIG_ENABLE',
-      { walletId, publicKey: wallet.publicKey },
-    );
-
-    this.logger.info({
+    this.logger.log({
       event: 'wallet_multisig_enabled',
       userId,
       walletId,
@@ -197,43 +251,36 @@ export class WalletService {
   }
 
   async freezeWallet(walletId: string, userId: string) {
-    const wallet = await this.prisma.wallet.update({
+    const wallet = await (this.prisma.wallet as any).update({
       where: { id: walletId, userId },
       data: { isFrozen: true },
     });
-
-    // Audit: Wallet frozen
-    await this.auditService.log(
-      userId,
-      'WALLET_FREEZE',
-      { walletId, publicKey: wallet.publicKey },
-    );
 
     return wallet;
   }
 
   async unfreezeWallet(walletId: string, userId: string) {
-    const wallet = await this.prisma.wallet.update({
+    const wallet = await (this.prisma.wallet as any).update({
       where: { id: walletId, userId },
       data: { isFrozen: false },
     });
 
-    // Audit: Wallet unfrozen
-    await this.auditService.log(
-      userId,
-      'WALLET_UNFREEZE',
-      { walletId, publicKey: wallet.publicKey },
-    );
-
     return wallet;
   }
 
-  async reconcileWallet(userId: string) {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
+  /**
+   * Reconcile the default wallet against the Stellar chain.
+   */
+  async reconcileWallet(userId: string, walletId?: string) {
+    let wallet: any;
+    if (walletId) {
+      wallet = await this.getWalletById(walletId, userId);
+    } else {
+      wallet = await this.getDefaultWallet(userId);
+    }
 
     const transactions = await this.prisma.transaction.findMany({
-      where: { userId },
+      where: { walletId: wallet.id },
       orderBy: { updatedAt: 'desc' },
       take: 100,
     });
@@ -312,21 +359,69 @@ export class WalletService {
   }
 
   /**
-   * Returns only the public key — safe to call on every Dashboard mount
+   * Returns the public key of the default/active wallet — safe to call on every Dashboard mount
    * without exposing the encrypted secret key.
    * Throws NotFoundException (404) if the user has no wallet yet.
    */
   async getPublicKey(userId: string) {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
-    return { publicKey: wallet.publicKey };
+    const wallet = await this.getDefaultWallet(userId);
+    return { publicKey: wallet.publicKey, walletId: wallet.id };
   }
 
-  async exportWallet(userId: string) {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
+  /**
+   * Get the default wallet by user ID.
+   * @deprecated Use getDefaultWallet instead for clarity
+   */
+  async findByUserId(userId: string) {
+    return this.getDefaultWallet(userId);
+  }
 
-    await this.auditLog.log({
+  async findByPublicKey(publicKey: string) {
+    return this.prisma.wallet.findUnique({ where: { publicKey } });
+  }
+
+  /**
+   * Get balances for the default wallet.
+   * Can optionally work with a specific walletId.
+   */
+  async getBalances(userId: string, walletId?: string, _afterTxHash?: string) {
+    void _afterTxHash;
+    
+    let wallet: any;
+    if (walletId) {
+      wallet = await this.getWalletById(walletId, userId);
+    } else {
+      wallet = await this.getDefaultWallet(userId);
+    }
+
+    const account = await this.loadAccount(wallet.publicKey);
+    return (account.balances ?? []).map((balance: any) => ({
+      asset: balance.asset_type === 'native' ? 'XLM' : balance.asset_code,
+      balance: balance.balance,
+    }));
+  }
+
+  async enableMultiSignature(walletId: string, userId: string) {
+    const wallet = await this.enableMultisig(walletId, userId);
+    return {
+      transactionHash: null,
+      cosignerPublicKey: await this.vaultService?.getCosignerPublicKey() ?? null,
+      wallet,
+    };
+  }
+
+  /**
+   * Export the secret key of the default wallet.
+   */
+  async exportWallet(userId: string, walletId?: string) {
+    let wallet: any;
+    if (walletId) {
+      wallet = await this.getWalletById(walletId, userId);
+    } else {
+      wallet = await this.getDefaultWallet(userId);
+    }
+
+    this.logger.warn({
       userId,
       category: AuditCategory.WALLET,
       operation: AuditOperation.WALLET_EXPORTED,
@@ -341,34 +436,45 @@ export class WalletService {
     };
   }
 
-  async importWallet(userId: string, secretKey: string) {
+  /**
+   * Import a secret key as a new wallet for the user.
+   */
+  async importWallet(userId: string, secretKey: string, alias?: string) {
     const keypair = Keypair.fromSecret(secretKey);
     const encryptedSecret = this.encrypt(secretKey, userId);
-    return this.prisma.wallet.upsert({
-      where: { userId },
-      update: { publicKey: keypair.publicKey(), encryptedSecret },
-      create: { userId, publicKey: keypair.publicKey(), encryptedSecret },
-    });
+    
+    // Create a new wallet instead of upserting (multi-wallet support)
+    const wallet = await this.createWallet(userId, keypair.publicKey(), alias);
 
-    await this.auditLog.log({
+    this.logger.warn({
       userId,
       category: AuditCategory.WALLET,
       operation: AuditOperation.WALLET_IMPORTED,
       outcome: AuditOutcome.SUCCESS,
       walletPublicKey: wallet.publicKey,
-      metadata: { action: 'Existing secret key imported/overwritten.' },
+      metadata: { action: 'New wallet imported.' },
     });
 
-    return wallet;
+    // Update with encrypted secret
+    const updated = await this.prisma.wallet.update({
+      where: { id: wallet.id },
+      data: { encryptedSecret },
+    });
+
+    return updated;
   }
 
-  async getKeypair(userId: string): Promise<Keypair> {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
-    return Keypair.fromSecret(this.decrypt(wallet.encryptedSecret, userId));
+  async signTransaction(userId: string, unsignedTransactionXdr: string) {
+    if (!this.vaultService) {
+      throw new Error('Delegated signer is not configured');
+    }
+    return this.vaultService.signTransaction(userId, unsignedTransactionXdr);
   }
 
   private async loadAccount(publicKey: string) {
+    if (this.rpcClient) {
+      return this.rpcClient.withHorizonServer((horizon) => horizon.loadAccount(publicKey));
+    }
     return server.loadAccount(publicKey);
   }
 

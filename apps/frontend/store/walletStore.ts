@@ -1,23 +1,52 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
 import api, { SimulationResult } from '../lib/api';
+import { readWalletState, writeWalletState } from '../lib/walletCache';
+import type { Balance, Transaction } from '../hooks/useWalletData';
 
 type WalletAction = 'balances' | 'transactions' | 'send';
 
+export interface Wallet {
+  id: string;
+  publicKey: string;
+  alias: string | null;
+  isDefault: boolean;
+  createdAt: string;
+}
+
 interface WalletStore {
-  publicKey: string | null;
+  wallets: Wallet[];
+  activeWalletId: string | null;
+  publicKey: string | null; // The public key of the active wallet
   balancesError: string | null;
   transactionsError: string | null;
   sendError: string | null;
   isLoadingBalances: boolean;
   isLoadingSend: boolean;
+  loading: boolean;
+  error: string | null;
+  balances: Balance[];
+  transactions: Transaction[];
+  balancesUpdatedAt: number | null;
+  transactionsUpdatedAt: number | null;
 
+  // Wallet management
+  setWallets: (wallets: Wallet[]) => void;
+  setActiveWalletId: (id: string | null) => void;
   setPublicKey: (key: string | null) => void;
+
+  // Error management
   setBalancesError: (error: string | null) => void;
   setTransactionsError: (error: string | null) => void;
   setSendError: (error: string | null) => void;
   clearError: (action: WalletAction) => void;
+  clearWalletError: () => void;
   setBalancesLoading: (isLoading: boolean) => void;
   setSendLoading: (isLoading: boolean) => void;
+  setCachedBalances: (balances: Balance[]) => void;
+  setCachedTransactions: (transactions: Transaction[]) => void;
+
+  // API operations
   sendTransfer: (data: {
     destinationPublicKey: string; amount: string;
     assetCode: string; assetIssuer?: string; memo?: string;
@@ -28,17 +57,55 @@ interface WalletStore {
     assetCode: string;
     assetIssuer?: string;
   }) => Promise<SimulationResult>;
+  createWallet: (alias?: string) => Promise<void>;
+  fetchWallets: () => Promise<void>;
+  switchWallet: (walletId: string) => Promise<void>;
+  addWallet: (alias?: string) => Promise<void>;
+  removeWallet: (walletId: string) => Promise<void>;
+  updateWalletAlias: (walletId: string, alias: string | null) => Promise<void>;
+
+  // Legacy support
+  fetchPublicKey: () => Promise<void>;
 }
 
-export const useWalletStore = create<WalletStore>((set) => ({
+const indexedDbStorage: StateStorage = {
+  getItem: async () => {
+    const state = await readWalletState();
+    return state ? JSON.stringify(state) : null;
+  },
+  setItem: async (_name, value) => writeWalletState(JSON.parse(value)),
+  removeItem: async () => undefined,
+};
+
+export const useWalletStore = create<WalletStore>()(persist((set, get) => ({
+  wallets: [],
+  activeWalletId: null,
   publicKey: null,
   balancesError: null,
   transactionsError: null,
   sendError: null,
   isLoadingBalances: false,
   isLoadingSend: false,
+  loading: false,
+  error: null,
+  balances: [],
+  transactions: [],
+  balancesUpdatedAt: null,
+  transactionsUpdatedAt: null,
 
+  // Wallet management
+  setWallets: (wallets) => set({ wallets }),
+  setActiveWalletId: (id) => {
+    const state = get();
+    const wallet = state.wallets.find(w => w.id === id);
+    set({ 
+      activeWalletId: id,
+      publicKey: wallet?.publicKey ?? null 
+    });
+  },
   setPublicKey: (key) => set({ publicKey: key }),
+
+  // Error management
   setBalancesError: (error) => set({ balancesError: error }),
   setTransactionsError: (error) => set({ transactionsError: error }),
   setSendError: (error) => set({ sendError: error }),
@@ -55,9 +122,13 @@ export const useWalletStore = create<WalletStore>((set) => ({
 
     set({ sendError: null });
   },
+  clearWalletError: () => set({ error: null }),
   setBalancesLoading: (isLoading) => set({ isLoadingBalances: isLoading }),
   setSendLoading: (isLoading) => set({ isLoadingSend: isLoading }),
+  setCachedBalances: (balances) => set({ balances, balancesUpdatedAt: Date.now() }),
+  setCachedTransactions: (transactions) => set({ transactions: transactions.slice(0, 50), transactionsUpdatedAt: Date.now() }),
 
+  // API operations
   sendTransfer: async (payload) => {
     set({ isLoadingSend: true, sendError: null });
 
@@ -78,12 +149,15 @@ export const useWalletStore = create<WalletStore>((set) => ({
     return data;
   },
 
-  createWallet: async () => {
+  /**
+   * Create the first wallet for a user.
+   */
+  createWallet: async (alias?: string) => {
     set({ loading: true, error: null });
     try {
-      // POST /wallet/create returns { publicKey: string }
-      const { data } = await api.post<{ publicKey: string }>('/wallet/create');
-      set({ publicKey: data.publicKey, loading: false });
+      const { data } = await api.post<{ publicKey: string; walletId: string }>('/wallet/create', { alias });
+      // After creating, fetch all wallets to update state
+      await get().fetchWallets();
     } catch (err: any) {
       const message =
         err?.response?.data?.message ?? err?.message ?? 'Failed to create wallet.';
@@ -91,16 +165,102 @@ export const useWalletStore = create<WalletStore>((set) => ({
     }
   },
 
+  /**
+   * Fetch all wallets for the current user.
+   */
+  fetchWallets: async () => {
+    set({ loading: true, error: null });
+    try {
+      const { data } = await api.get<Wallet[]>('/wallet/list');
+      const defaultWallet = data.find(w => w.isDefault) || data[0];
+      set({
+        wallets: data,
+        activeWalletId: defaultWallet?.id ?? null,
+        publicKey: defaultWallet?.publicKey ?? null,
+        loading: false,
+      });
+    } catch (err: any) {
+      // 404 means the user has no wallet yet — this is an expected state
+      if (err?.response?.status === 404) {
+        set({ wallets: [], activeWalletId: null, publicKey: null, loading: false });
+      } else {
+        const message =
+          err?.response?.data?.message ?? err?.message ?? 'Failed to fetch wallets.';
+        set({ loading: false, error: message });
+      }
+    }
+  },
+
+  /**
+   * Switch to a different wallet.
+   */
+  switchWallet: async (walletId: string) => {
+    set({ loading: true, error: null });
+    try {
+      await api.post(`/wallet/${walletId}/set-default`);
+      const wallet = get().wallets.find(w => w.id === walletId);
+      if (wallet) {
+        get().setActiveWalletId(walletId);
+      }
+      set({ loading: false });
+    } catch (err: any) {
+      const message = err?.response?.data?.message ?? 'Failed to switch wallet.';
+      set({ loading: false, error: message });
+    }
+  },
+
+  /**
+   * Add a new wallet.
+   */
+  addWallet: async (alias?: string) => {
+    set({ loading: true, error: null });
+    try {
+      await api.post('/wallet/add', { alias });
+      await get().fetchWallets();
+    } catch (err: any) {
+      const message = err?.response?.data?.message ?? 'Failed to add wallet.';
+      set({ loading: false, error: message });
+    }
+  },
+
+  /**
+   * Remove a wallet.
+   */
+  removeWallet: async (walletId: string) => {
+    set({ loading: true, error: null });
+    try {
+      await api.delete(`/wallet/${walletId}`);
+      await get().fetchWallets();
+    } catch (err: any) {
+      const message = err?.response?.data?.message ?? 'Failed to remove wallet.';
+      set({ loading: false, error: message });
+    }
+  },
+
+  /**
+   * Update a wallet's alias.
+   */
+  updateWalletAlias: async (walletId: string, alias: string | null) => {
+    set({ error: null });
+    try {
+      await api.put(`/wallet/${walletId}/alias`, { alias });
+      const wallets = get().wallets.map(w =>
+        w.id === walletId ? { ...w, alias } : w
+      );
+      set({ wallets });
+    } catch (err: any) {
+      const message = err?.response?.data?.message ?? 'Failed to update wallet alias.';
+      set({ error: message });
+    }
+  },
+
+  // Legacy support
   fetchPublicKey: async () => {
     set({ loading: true, error: null });
     try {
-      // GET /wallet/public-key returns { publicKey: string }
-      // Returns 404 when no wallet exists — expected for new users.
-      const { data } = await api.get<{ publicKey: string }>('/wallet/public-key');
+      const { data } = await api.get<{ publicKey: string; walletId: string }>('/wallet/public-key');
       set({ publicKey: data.publicKey, loading: false });
     } catch (err: any) {
-      // 404 means the user has no wallet yet — this is an expected state,
-      // not an error that should be surfaced in the UI.
       if (err?.response?.status === 404) {
         set({ publicKey: null, loading: false });
       } else {
@@ -110,6 +270,14 @@ export const useWalletStore = create<WalletStore>((set) => ({
       }
     }
   },
-
-  clearError: () => set({ error: null }),
+}), {
+  name: 'wallet-state',
+  storage: createJSONStorage(() => indexedDbStorage),
+  partialize: (state) => ({
+    balances: state.balances,
+    transactions: state.transactions.slice(0, 50),
+    balancesUpdatedAt: state.balancesUpdatedAt,
+    transactionsUpdatedAt: state.transactionsUpdatedAt,
+  }),
 }));
+
