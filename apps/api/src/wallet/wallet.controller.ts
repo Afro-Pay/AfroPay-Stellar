@@ -277,5 +277,22 @@ export class WalletController {
   ) {
     return this.walletService.getBalances(req.user.userId, undefined, afterTxHash);
   }
+
+  @Post('trustline')
+  @ApiOperation({ summary: 'Add a trustline for a non-native asset (e.g. USDC, NGN)' })
+  @ApiResponse({ status: 201, description: 'Trustline added (or already present)' })
+  @ApiResponse({ status: 400, description: 'Invalid asset issuer or trustline could not be established' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async addTrustline(
+    @Request() req: any,
+    @Body() dto: AddTrustlineDto,
+  ) {
+    return this.walletService.addTrustline(
+      req.user.userId,
+      dto.assetCode,
+      dto.assetIssuer,
+      dto.limit,
+    );
+  }
 }
 

@@ -149,6 +149,7 @@ export async function ensureTrustline(
   keypair: Keypair,
   asset: TrustlineAsset,
   networkPassphrase: string = Networks.TESTNET,
+  limit?: string,
 ): Promise<EnsureTrustlineResult> {
   const publicKey = keypair.publicKey();
   const current = await checkTrustline(horizonUrl, publicKey, asset);
@@ -176,7 +177,7 @@ export async function ensureTrustline(
 
   // status === 'missing' — submit ChangeTrust
   logger.log(`Creating trustline for ${asset.code} on ${publicKey}`);
-  const txHash = await submitChangeTrust(horizonUrl, keypair, asset, networkPassphrase);
+  const txHash = await submitChangeTrust(horizonUrl, keypair, asset, networkPassphrase, limit);
 
   const updated = await checkTrustline(horizonUrl, publicKey, asset);
   return { created: true, txHash, status: updated };
@@ -306,6 +307,7 @@ async function submitChangeTrust(
   keypair: Keypair,
   asset: TrustlineAsset,
   networkPassphrase: string,
+  limit?: string,
 ): Promise<string> {
   const server = new Horizon.Server(horizonUrl);
   const account = await server.loadAccount(keypair.publicKey());
@@ -315,7 +317,7 @@ async function submitChangeTrust(
     fee: BASE_FEE,
     networkPassphrase,
   })
-    .addOperation(Operation.changeTrust({ asset: stellarAsset }))
+    .addOperation(Operation.changeTrust({ asset: stellarAsset, ...(limit ? { limit } : {}) }))
     .setTimeout(30)
     .build();
 

@@ -97,6 +97,10 @@ export class WalletService {
       isDefault,
     });
 
+    if (STELLAR_NETWORK === 'testnet') {
+      await this.fundTestnetAccount(userId, wallet.id, publicKey);
+    }
+
     return wallet;
   }
 
