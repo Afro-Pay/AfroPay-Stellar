@@ -4,13 +4,79 @@ import { WalletService } from './wallet.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { WalletOwnershipGuard } from './wallet-ownership.guard';
 import { Keypair } from 'stellar-sdk';
+import {
+  AuthenticationResponse,
+  RegistrationResponse,
+  WebAuthnService,
+} from './webauthn.service';
 
 @ApiTags('wallet')
 @Controller('wallet')
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth('JWT-auth')
 export class WalletController {
-  constructor(private readonly walletService: WalletService) {}
+  constructor(
+    private readonly walletService: WalletService,
+    private readonly webAuthnService: WebAuthnService,
+  ) {}
+
+  @Post('passkey/registration-options')
+  @ApiOperation({ summary: 'Create WebAuthn passkey registration options' })
+  async getPasskeyRegistrationOptions(@Request() req: any) {
+    return this.webAuthnService.generateRegistrationOptions(
+      req.user.userId,
+      req.user.username ?? req.user.email ?? req.user.userId,
+      req.user.displayName ?? req.user.username ?? req.user.email ?? req.user.userId,
+    );
+  }
+
+  @Post('passkey/registration')
+  @ApiOperation({ summary: 'Verify and register a WebAuthn passkey' })
+  async registerPasskey(
+    @Request() req: any,
+    @Body() body: { response: RegistrationResponse; challenge: string; origin: string; rpId?: string },
+  ) {
+    if (!body?.response || !body.challenge || !body.origin) {
+      throw new BadRequestException('response, challenge, and origin are required');
+    }
+
+    const passkey = this.webAuthnService.verifyRegistration(
+      req.user.userId,
+      body.response,
+      body.challenge,
+      body.origin,
+      body.rpId,
+    );
+
+    return { success: true, credentialId: passkey.credentialId };
+  }
+
+  @Post('passkey/authentication-options')
+  @ApiOperation({ summary: 'Create WebAuthn passkey authentication options' })
+  async getPasskeyAuthenticationOptions(@Request() req: any) {
+    return this.webAuthnService.generateAuthenticationOptions(req.user.userId);
+  }
+
+  @Post('passkey/authentication')
+  @ApiOperation({ summary: 'Verify a WebAuthn passkey assertion' })
+  async authenticatePasskey(
+    @Request() req: any,
+    @Body() body: { response: AuthenticationResponse; challenge: string; origin: string; rpId?: string },
+  ) {
+    if (!body?.response || !body.challenge || !body.origin) {
+      throw new BadRequestException('response, challenge, and origin are required');
+    }
+
+    const passkey = this.webAuthnService.verifyAuthentication(
+      req.user.userId,
+      body.response,
+      body.challenge,
+      body.origin,
+      body.rpId,
+    );
+
+    return { success: true, credentialId: passkey.credentialId };
+  }
 
   /**
    * Create the first wallet for a user.
