@@ -4,9 +4,12 @@ import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { WalletModule } from './wallet/wallet.module';
 import { TransactionModule } from './transaction/transaction.module';
+import { MetricsModule } from './metrics/metrics.module';
 import { LoggerModule } from 'nestjs-pino';
 import { AdminModule } from './admin/admin.module';
-import { RateLimitModule } from './rate-limit/rate-limit.module';
+import { SorobanModule } from './soroban/soroban.module';
+import { ComplianceModule } from './transaction/compliance.module';
+import { LiquidityModule } from './reconciliation/liquidity.module';
 
 @Module({
   imports: [
@@ -21,16 +24,17 @@ import { RateLimitModule } from './rate-limit/rate-limit.module';
         }),
       },
     }),
-    // Global Bull/Redis connection — shared by every BullModule.registerQueue().
-    // Falls back to localhost in test/dev when REDIS_URL is absent.
-    BullModule.forRoot({
-      redis: process.env.REDIS_URL || 'redis://localhost:6379',
-    }),
+    MetricsModule,
     AuditModule,
     AuthModule,
     WalletModule,
     TransactionModule,
     AdminModule,
+    SorobanModule,
+    ComplianceModule,
+    LiquidityModule,
   ],
+  controllers: [],
+  providers: [],
 })
 export class AppModule {}

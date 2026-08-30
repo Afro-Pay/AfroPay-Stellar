@@ -1,6 +1,12 @@
 import { useState } from 'react';
 import { useRouter } from 'next/router';
 import api, { storeSessionTokens } from '../lib/api';
+import Sep10LoginButton from '../components/Sep10LoginButton';
+import { useWalletStore } from '../store/walletStore';
+
+// ---------------------------------------------------------------------------
+// Email / password validation
+// ---------------------------------------------------------------------------
 
 type FieldErrors = {
   email?: string;
@@ -24,34 +30,47 @@ function validateLoginForm(email: string, password: string): FieldErrors {
   return nextErrors;
 }
 
+// ---------------------------------------------------------------------------
+// Login page
+// ---------------------------------------------------------------------------
+
 export default function Login() {
   const router = useRouter();
-  const emailErrorId = 'auth-email-error';
-  const passwordErrorId = 'auth-password-error';
-  const authErrorId = 'auth-error';
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
-  const [authError, setAuthError] = useState('');
-  const [isRegister, setIsRegister] = useState(false);
+  const { setPublicKey } = useWalletStore();
 
-  const validateField = (field: 'email' | 'password', currentEmail = email, currentPassword = password) => {
+  const emailErrorId    = 'auth-email-error';
+  const passwordErrorId = 'auth-password-error';
+  const authErrorId     = 'auth-error';
+
+  // Email / password form state
+  const [email, setEmail]             = useState('');
+  const [password, setPassword]       = useState('');
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [authError, setAuthError]     = useState('');
+  const [isRegister, setIsRegister]   = useState(false);
+
+  // SEP-10 tab state — 'wallet' shows the Freighter button, 'password' the classic form
+  const [authTab, setAuthTab] = useState<'wallet' | 'password'>('wallet');
+
+  // ---------------------------------------------------------------------------
+  // Email / password handlers
+  // ---------------------------------------------------------------------------
+
+  const validateField = (
+    field: 'email' | 'password',
+    currentEmail  = email,
+    currentPassword = password,
+  ) => {
     const nextErrors = validateLoginForm(currentEmail, currentPassword);
-    setFieldErrors((previous) => ({ ...previous, [field]: nextErrors[field] }));
-    if (field === 'email') {
-      setAuthError('');
-    }
+    setFieldErrors((prev) => ({ ...prev, [field]: nextErrors[field] }));
+    if (field === 'email') setAuthError('');
   };
 
-  const submit = async (e: React.FormEvent) => {
+  const submitPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     const nextErrors = validateLoginForm(email, password);
     setFieldErrors(nextErrors);
-
-    if (Object.keys(nextErrors).length > 0) {
-      setAuthError('');
-      return;
-    }
+    if (Object.keys(nextErrors).length > 0) { setAuthError(''); return; }
 
     try {
       const endpoint = isRegister ? '/auth/register' : '/auth/login';
@@ -63,86 +82,260 @@ export default function Login() {
     }
   };
 
-  const emailDescribedBy = [authError ? authErrorId : '', fieldErrors.email ? emailErrorId : ''].filter(Boolean).join(' ') || undefined;
-  const passwordDescribedBy = [authError ? authErrorId : '', fieldErrors.password ? passwordErrorId : ''].filter(Boolean).join(' ') || undefined;
+  // ---------------------------------------------------------------------------
+  // SEP-10 / Freighter handler
+  // ---------------------------------------------------------------------------
+
+  const handleWalletSuccess = (stellarAccount: string, _token: string) => {
+    // publicKey is already persisted to localStorage by sep10Login(); update store.
+    setPublicKey(stellarAccount);
+    router.push('/');
+  };
+
+  // ---------------------------------------------------------------------------
+  // aria describedby helpers
+  // ---------------------------------------------------------------------------
+
+  const emailDescribedBy = [
+    authError          ? authErrorId     : '',
+    fieldErrors.email  ? emailErrorId    : '',
+  ].filter(Boolean).join(' ') || undefined;
+
+  const passwordDescribedBy = [
+    authError            ? authErrorId      : '',
+    fieldErrors.password ? passwordErrorId  : '',
+  ].filter(Boolean).join(' ') || undefined;
+
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
 
   return (
-    <main id="main-content" tabIndex={-1} className="min-h-screen bg-gray-950 text-white flex items-center justify-center p-4">
-      <form id="auth-form" onSubmit={submit} className="bg-gray-900 p-8 rounded-xl w-full max-w-sm space-y-4" noValidate>
-        <h1 className="text-2xl font-bold text-center">RemitX</h1>
-        <p className="text-center text-gray-400">{isRegister ? 'Create account' : 'Sign in'}</p>
-        <div className="space-y-2" aria-live="polite" aria-atomic="true">
-          {authError && (
-            <p id={authErrorId} className="text-red-400 text-sm" role="alert" aria-live="assertive">
-              {authError}
-            </p>
-          )}
+    <main
+      id="main-content"
+      tabIndex={-1}
+      className="min-h-screen bg-gray-950 text-white flex items-center justify-center p-4"
+    >
+      <div className="w-full max-w-sm space-y-5">
+        {/* Header */}
+        <div className="text-center space-y-1">
+          <h1 className="text-3xl font-bold tracking-tight">RemitX</h1>
+          <p className="text-gray-400 text-sm">
+            {authTab === 'wallet' ? 'Sign in with your Stellar wallet' : isRegister ? 'Create account' : 'Sign in'}
+          </p>
         </div>
-        <div>
-          <label htmlFor="auth-email" className="block text-sm font-medium text-gray-300 mb-1">
-            Email
-          </label>
-          <input
-            id="auth-email"
-            name="email"
-            className="w-full bg-gray-800 rounded-lg p-3 outline-none focus:ring-2 focus:ring-indigo-500"
-            type="email"
-            value={email}
-            onChange={(e) => {
-              setEmail(e.target.value);
-              setFieldErrors((previous) => ({ ...previous, email: undefined }));
-            }}
-            onBlur={() => validateField('email')}
-            autoComplete="email"
-            aria-describedby={emailDescribedBy}
-            aria-invalid={Boolean(fieldErrors.email)}
-            required
-          />
-          {fieldErrors.email && (
-            <p id={emailErrorId} role="alert" aria-live="assertive" className="mt-1 text-sm text-red-400">
-              {fieldErrors.email}
-            </p>
-          )}
-        </div>
-        <div>
-          <label htmlFor="auth-password" className="block text-sm font-medium text-gray-300 mb-1">
-            Password <span className="text-gray-500">(minimum 8 characters)</span>
-          </label>
-          <input
-            id="auth-password"
-            name="password"
-            className="w-full bg-gray-800 rounded-lg p-3 outline-none focus:ring-2 focus:ring-indigo-500"
-            type="password"
-            value={password}
-            onChange={(e) => {
-              setPassword(e.target.value);
-              setFieldErrors((previous) => ({ ...previous, password: undefined }));
-            }}
-            onBlur={() => validateField('password')}
-            autoComplete={isRegister ? 'new-password' : 'current-password'}
-            aria-describedby={passwordDescribedBy}
-            aria-invalid={Boolean(fieldErrors.password)}
-            required
-            minLength={8}
-          />
-          {fieldErrors.password && (
-            <p id={passwordErrorId} role="alert" aria-live="assertive" className="mt-1 text-sm text-red-400">
-              {fieldErrors.password}
-            </p>
-          )}
-        </div>
-        <button className="w-full bg-indigo-600 hover:bg-indigo-700 rounded-lg p-3 font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-300">
-          {isRegister ? 'Register' : 'Login'}
-        </button>
-        <button
-          type="button"
-          className="w-full text-center text-sm text-gray-400 hover:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded"
-          onClick={() => setIsRegister(!isRegister)}
-          aria-label={isRegister ? 'Switch to login form' : 'Switch to registration form'}
+
+        {/* Tab switcher */}
+        <div
+          role="tablist"
+          aria-label="Authentication method"
+          className="grid grid-cols-2 gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1"
         >
-          {isRegister ? 'Already have an account? Login' : "Don't have an account? Register"}
-        </button>
-      </form>
+          <button
+            role="tab"
+            aria-selected={authTab === 'wallet'}
+            aria-controls="wallet-panel"
+            id="wallet-tab"
+            type="button"
+            onClick={() => setAuthTab('wallet')}
+            className={[
+              'py-2 px-3 rounded-lg text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500',
+              authTab === 'wallet'
+                ? 'bg-indigo-600 text-white shadow'
+                : 'text-gray-400 hover:text-white',
+            ].join(' ')}
+          >
+            🔑 Wallet
+          </button>
+          <button
+            role="tab"
+            aria-selected={authTab === 'password'}
+            aria-controls="password-panel"
+            id="password-tab"
+            type="button"
+            onClick={() => { setAuthTab('password'); setAuthError(''); }}
+            className={[
+              'py-2 px-3 rounded-lg text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500',
+              authTab === 'password'
+                ? 'bg-indigo-600 text-white shadow'
+                : 'text-gray-400 hover:text-white',
+            ].join(' ')}
+          >
+            ✉️ Email
+          </button>
+        </div>
+
+        {/* ----------------------------------------------------------------- */}
+        {/* Tab: Wallet (SEP-10)                                               */}
+        {/* ----------------------------------------------------------------- */}
+        {authTab === 'wallet' && (
+          <section
+            id="wallet-panel"
+            role="tabpanel"
+            aria-labelledby="wallet-tab"
+            className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4"
+          >
+            <div className="text-center space-y-1">
+              <div
+                aria-hidden="true"
+                className="mx-auto w-12 h-12 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-2xl"
+              >
+                ✦
+              </div>
+              <p className="text-sm text-gray-300 font-medium">
+                Stellar SEP-10 Authentication
+              </p>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                Prove ownership of your Stellar account by signing a challenge
+                with your Freighter wallet. No password required.
+              </p>
+            </div>
+
+            <Sep10LoginButton
+              onSuccess={handleWalletSuccess}
+              onError={() => {/* error is shown inside Sep10LoginButton */}}
+            />
+
+            {/* SEP-10 flow explanation */}
+            <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside border-t border-gray-800 pt-3">
+              <li>Click the button above to connect Freighter</li>
+              <li>A challenge transaction is generated by the server</li>
+              <li>Freighter asks you to sign the transaction</li>
+              <li>Your signature is verified — no private key ever leaves your wallet</li>
+            </ol>
+          </section>
+        )}
+
+        {/* ----------------------------------------------------------------- */}
+        {/* Tab: Email / password                                              */}
+        {/* ----------------------------------------------------------------- */}
+        {authTab === 'password' && (
+          <section
+            id="password-panel"
+            role="tabpanel"
+            aria-labelledby="password-tab"
+          >
+            <form
+              id="auth-form"
+              onSubmit={submitPassword}
+              className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4"
+              noValidate
+            >
+              {/* Auth-level error */}
+              <div aria-live="polite" aria-atomic="true">
+                {authError && (
+                  <p
+                    id={authErrorId}
+                    className="text-red-400 text-sm"
+                    role="alert"
+                    aria-live="assertive"
+                  >
+                    {authError}
+                  </p>
+                )}
+              </div>
+
+              {/* Email */}
+              <div>
+                <label
+                  htmlFor="auth-email"
+                  className="block text-sm font-medium text-gray-300 mb-1"
+                >
+                  Email
+                </label>
+                <input
+                  id="auth-email"
+                  name="email"
+                  className="w-full bg-gray-800 border border-gray-700/50 rounded-lg p-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                  type="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    setFieldErrors((prev) => ({ ...prev, email: undefined }));
+                  }}
+                  onBlur={() => validateField('email')}
+                  autoComplete="email"
+                  aria-describedby={emailDescribedBy}
+                  aria-invalid={Boolean(fieldErrors.email)}
+                  required
+                />
+                {fieldErrors.email && (
+                  <p
+                    id={emailErrorId}
+                    role="alert"
+                    aria-live="assertive"
+                    className="mt-1 text-xs text-red-400"
+                  >
+                    {fieldErrors.email}
+                  </p>
+                )}
+              </div>
+
+              {/* Password */}
+              <div>
+                <label
+                  htmlFor="auth-password"
+                  className="block text-sm font-medium text-gray-300 mb-1"
+                >
+                  Password{' '}
+                  <span className="text-gray-500 font-normal">(min 8 characters)</span>
+                </label>
+                <input
+                  id="auth-password"
+                  name="password"
+                  className="w-full bg-gray-800 border border-gray-700/50 rounded-lg p-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                  type="password"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setFieldErrors((prev) => ({ ...prev, password: undefined }));
+                  }}
+                  onBlur={() => validateField('password')}
+                  autoComplete={isRegister ? 'new-password' : 'current-password'}
+                  aria-describedby={passwordDescribedBy}
+                  aria-invalid={Boolean(fieldErrors.password)}
+                  required
+                  minLength={8}
+                />
+                {fieldErrors.password && (
+                  <p
+                    id={passwordErrorId}
+                    role="alert"
+                    aria-live="assertive"
+                    className="mt-1 text-xs text-red-400"
+                  >
+                    {fieldErrors.password}
+                  </p>
+                )}
+              </div>
+
+              {/* Submit */}
+              <button
+                type="submit"
+                className="w-full bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 active:scale-[0.99] transition-all rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              >
+                {isRegister ? 'Register' : 'Login'}
+              </button>
+
+              {/* Toggle register/login */}
+              <button
+                type="button"
+                className="w-full text-center text-xs text-gray-400 hover:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded transition-colors"
+                onClick={() => setIsRegister(!isRegister)}
+                aria-label={
+                  isRegister
+                    ? 'Switch to login form'
+                    : 'Switch to registration form'
+                }
+              >
+                {isRegister
+                  ? 'Already have an account? Login'
+                  : "Don't have an account? Register"}
+              </button>
+            </form>
+          </section>
+        )}
+      </div>
     </main>
   );
 }

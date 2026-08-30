@@ -1,0 +1,495 @@
+name: Deploy to Mainnet
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'  # Matches v1.0.0, v2.3.4, etc.
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'  # Matches v1.0.0-rc.1, etc.
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/afropay-stellar
+  KUBE_NAMESPACE: afropay
+  ROLLBACK_TIMEOUT: 300  # 5 minutes for health checks before rollback
+  HEALTH_CHECK_INTERVAL: 10  # Check every 10 seconds
+
+jobs:
+  pre-deploy-checks:
+    name: Pre-Deployment Validation
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.extract_version.outputs.tag }}
+      is_production: ${{ steps.check_env.outputs.is_production }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: extract_version
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "Deploying version: $TAG_NAME"
+
+      - name: Determine environment
+        id: check_env
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          if [[ "$TAG_NAME" =~ -rc\. ]]; then
+            echo "is_production=false" >> $GITHUB_OUTPUT
+            echo "Environment: STAGING (release candidate)"
+          else
+            echo "is_production=true" >> $GITHUB_OUTPUT
+            echo "Environment: MAINNET (production)"
+          fi
+
+      - name: Verify release tag follows semver
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          if ! [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "❌ Tag $TAG_NAME does not follow semantic versioning"
+            echo "Expected format: v1.2.3 or v1.2.3-rc.1"
+            exit 1
+          fi
+          echo "✅ Tag $TAG_NAME follows semantic versioning"
+
+      - name: Check for required secrets
+        run: |
+          MISSING_SECRETS=()
+          
+          if [ -z "${{ secrets.KUBE_CONFIG_MAINNET }}" ]; then
+            MISSING_SECRETS+=("KUBE_CONFIG_MAINNET")
+          fi
+          
+          if [ -z "${{ secrets.DOCKER_REGISTRY_TOKEN }}" ]; then
+            MISSING_SECRETS+=("DOCKER_REGISTRY_TOKEN")
+          fi
+          
+          if [ ${#MISSING_SECRETS[@]} -gt 0 ]; then
+            echo "❌ Missing required secrets:"
+            printf '%s\n' "${MISSING_SECRETS[@]}"
+            exit 1
+          fi
+          
+          echo "✅ All required secrets are configured"
+
+      - name: Validate Kubernetes manifests
+        run: |
+          echo "Validating Kubernetes YAML syntax..."
+          for file in deploy/kubernetes/*.yaml; do
+            if kubectl apply --dry-run=client -f "$file" > /dev/null 2>&1; then
+              echo "✅ $file is valid"
+            else
+              echo "❌ $file has syntax errors"
+              kubectl apply --dry-run=client -f "$file"
+              exit 1
+            fi
+          done
+
+  build-and-push-images:
+    name: Build & Push Docker Images
+    needs: pre-deploy-checks
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - name: api
+            context: apps/api
+            dockerfile: apps/api/Dockerfile
+          - name: frontend
+            context: apps/frontend
+            dockerfile: apps/frontend/Dockerfile
+          - name: rust-worker
+            context: services/rust-worker
+            dockerfile: services/rust-worker/Dockerfile
+          - name: python-analytics
+            context: services/python-analytics
+            dockerfile: services/python-analytics/Dockerfile
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.service.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable=${{ needs.pre-deploy-checks.outputs.is_production == 'true' }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ needs.pre-deploy-checks.outputs.release_tag }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            GIT_SHA=${{ github.sha }}
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.service.name }}:${{ needs.pre-deploy-checks.outputs.release_tag }}
+          format: cyclonedx-json
+          output-file: sbom-${{ matrix.service.name }}.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.service.name }}
+          path: sbom-${{ matrix.service.name }}.json
+          retention-days: 90
+
+  deploy-to-mainnet:
+    name: Deploy to Mainnet Cluster
+    needs: [pre-deploy-checks, build-and-push-images]
+    runs-on: ubuntu-latest
+    if: needs.pre-deploy-checks.outputs.is_production == 'true'
+    environment:
+      name: production
+      url: https://api.afropay.io
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure kubectl context
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG_MAINNET }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+          
+          # Verify connection
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Create namespace if not exists
+        run: |
+          if ! kubectl get namespace ${{ env.KUBE_NAMESPACE }} > /dev/null 2>&1; then
+            kubectl create namespace ${{ env.KUBE_NAMESPACE }}
+            echo "✅ Created namespace: ${{ env.KUBE_NAMESPACE }}"
+          else
+            echo "✅ Namespace ${{ env.KUBE_NAMESPACE }} already exists"
+          fi
+
+      - name: Apply ConfigMap and Secrets
+        run: |
+          echo "Applying ConfigMap..."
+          kubectl apply -f deploy/kubernetes/configmap.yaml
+          
+          echo "Applying Secrets..."
+          kubectl apply -f deploy/kubernetes/secrets.yaml
+
+      - name: Run database migrations
+        run: |
+          echo "Running database migrations..."
+          
+          # Update migration job with new image tag
+          sed -i "s|image:.*|image: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-api:${{ needs.pre-deploy-checks.outputs.release_tag }}|g" deploy/kubernetes/migration-job.yaml
+          
+          # Delete old job if exists
+          kubectl delete job migration-job -n ${{ env.KUBE_NAMESPACE }} --ignore-not-found=true
+          
+          # Create and run migration job
+          kubectl apply -f deploy/kubernetes/migration-job.yaml
+          
+          # Wait for migration to complete (max 5 minutes)
+          kubectl wait --for=condition=complete --timeout=300s job/migration-job -n ${{ env.KUBE_NAMESPACE }} || {
+            echo "❌ Migration job failed or timed out"
+            kubectl logs -l job-name=migration-job -n ${{ env.KUBE_NAMESPACE }} --tail=100
+            exit 1
+          }
+          
+          echo "✅ Database migrations completed successfully"
+
+      - name: Record deployment state (pre-deploy)
+        id: pre_deploy_state
+        run: |
+          echo "Recording current deployment state..."
+          
+          # Store rollout history for each service
+          for service in api frontend rust-worker python-analytics; do
+            if kubectl get deployment $service -n ${{ env.KUBE_NAMESPACE }} > /dev/null 2>&1; then
+              REVISION=$(kubectl rollout history deployment/$service -n ${{ env.KUBE_NAMESPACE }} | tail -n 1 | awk '{print $1}')
+              echo "${service}_revision=$REVISION" >> $GITHUB_OUTPUT
+              echo "Deployment $service is at revision $REVISION"
+            else
+              echo "Deployment $service does not exist yet (first deployment)"
+              echo "${service}_revision=0" >> $GITHUB_OUTPUT
+            fi
+          done
+
+      - name: Update deployment manifests with new image tags
+        run: |
+          TAG="${{ needs.pre-deploy-checks.outputs.release_tag }}"
+          
+          # Update image tags in deployment manifests
+          sed -i "s|image: registry.example.com/afropay-stellar/api:.*|image: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-api:$TAG|g" deploy/kubernetes/api.yaml
+          sed -i "s|image: registry.example.com/afropay-stellar/frontend:.*|image: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-frontend:$TAG|g" deploy/kubernetes/frontend.yaml
+          sed -i "s|image: registry.example.com/afropay-stellar/rust-worker:.*|image: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-rust-worker:$TAG|g" deploy/kubernetes/rust-worker.yaml
+          sed -i "s|image: registry.example.com/afropay-stellar/python-analytics:.*|image: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-python-analytics:$TAG|g" deploy/kubernetes/python-analytics.yaml
+          
+          echo "✅ Updated all deployment manifests to version $TAG"
+
+      - name: Deploy API
+        run: |
+          echo "Deploying API service..."
+          kubectl apply -f deploy/kubernetes/api.yaml
+          
+          # Record deployment annotation
+          kubectl annotate deployment/api -n ${{ env.KUBE_NAMESPACE }} \
+            kubernetes.io/change-cause="Deploy ${{ needs.pre-deploy-checks.outputs.release_tag }} via GitHub Actions (run ${{ github.run_number }})" \
+            --overwrite
+
+      - name: Deploy Frontend
+        run: |
+          echo "Deploying Frontend service..."
+          kubectl apply -f deploy/kubernetes/frontend.yaml
+          
+          kubectl annotate deployment/frontend -n ${{ env.KUBE_NAMESPACE }} \
+            kubernetes.io/change-cause="Deploy ${{ needs.pre-deploy-checks.outputs.release_tag }} via GitHub Actions (run ${{ github.run_number }})" \
+            --overwrite
+
+      - name: Deploy Rust Worker
+        run: |
+          echo "Deploying Rust Worker service..."
+          kubectl apply -f deploy/kubernetes/rust-worker.yaml
+          
+          kubectl annotate deployment/rust-worker -n ${{ env.KUBE_NAMESPACE }} \
+            kubernetes.io/change-cause="Deploy ${{ needs.pre-deploy-checks.outputs.release_tag }} via GitHub Actions (run ${{ github.run_number }})" \
+            --overwrite
+
+      - name: Deploy Python Analytics
+        run: |
+          echo "Deploying Python Analytics service..."
+          kubectl apply -f deploy/kubernetes/python-analytics.yaml
+          
+          kubectl annotate deployment/python-analytics -n ${{ env.KUBE_NAMESPACE }} \
+            kubernetes.io/change-cause="Deploy ${{ needs.pre-deploy-checks.outputs.release_tag }} via GitHub Actions (run ${{ github.run_number }})" \
+            --overwrite
+
+      - name: Apply Ingress rules
+        run: |
+          echo "Applying Ingress configuration..."
+          kubectl apply -f deploy/kubernetes/ingress.yaml
+
+      - name: Monitor deployment health (5-minute gate)
+        id: health_check
+        run: |
+          echo "Monitoring deployment health for ${{ env.ROLLBACK_TIMEOUT }} seconds..."
+          
+          SERVICES=("api" "frontend" "rust-worker" "python-analytics")
+          START_TIME=$(date +%s)
+          TIMEOUT=${{ env.ROLLBACK_TIMEOUT }}
+          CHECK_INTERVAL=${{ env.HEALTH_CHECK_INTERVAL }}
+          
+          ALL_HEALTHY=false
+          
+          while true; do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED=$((CURRENT_TIME - START_TIME))
+            
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "❌ Health check timeout reached ($TIMEOUT seconds)"
+              break
+            fi
+            
+            echo ""
+            echo "⏱️  Health check progress: ${ELAPSED}s / ${TIMEOUT}s"
+            echo "---"
+            
+            ALL_READY=true
+            
+            for service in "${SERVICES[@]}"; do
+              # Check if deployment exists
+              if ! kubectl get deployment $service -n ${{ env.KUBE_NAMESPACE }} > /dev/null 2>&1; then
+                echo "⚠️  Deployment $service does not exist"
+                ALL_READY=false
+                continue
+              fi
+              
+              # Get deployment status
+              DESIRED=$(kubectl get deployment $service -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.spec.replicas}')
+              READY=$(kubectl get deployment $service -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.status.readyReplicas}')
+              AVAILABLE=$(kubectl get deployment $service -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.status.availableReplicas}')
+              
+              READY=${READY:-0}
+              AVAILABLE=${AVAILABLE:-0}
+              
+              if [ "$READY" -eq "$DESIRED" ] && [ "$AVAILABLE" -eq "$DESIRED" ]; then
+                echo "✅ $service: $READY/$DESIRED replicas ready"
+              else
+                echo "⏳ $service: $READY/$DESIRED replicas ready, $AVAILABLE available"
+                ALL_READY=false
+                
+                # Show pod status for debugging
+                kubectl get pods -n ${{ env.KUBE_NAMESPACE }} -l app=$service --no-headers
+              fi
+            done
+            
+            if [ "$ALL_READY" = true ]; then
+              echo ""
+              echo "✅ All services are healthy!"
+              ALL_HEALTHY=true
+              break
+            fi
+            
+            sleep $CHECK_INTERVAL
+          done
+          
+          if [ "$ALL_HEALTHY" = false ]; then
+            echo ""
+            echo "❌ Deployment health check failed"
+            echo "health_check_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "health_check_passed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify API health endpoint
+        if: steps.health_check.outputs.health_check_passed == 'true'
+        run: |
+          echo "Verifying API /health endpoint..."
+          
+          API_POD=$(kubectl get pods -n ${{ env.KUBE_NAMESPACE }} -l app=api -o jsonpath='{.items[0].metadata.name}')
+          
+          if kubectl exec -n ${{ env.KUBE_NAMESPACE }} $API_POD -- curl -sf http://localhost:3001/health > /dev/null; then
+            echo "✅ API health endpoint is responding"
+          else
+            echo "❌ API health endpoint is not responding"
+            exit 1
+          fi
+
+      - name: Post-deployment validation
+        if: steps.health_check.outputs.health_check_passed == 'true'
+        run: |
+          echo "Running post-deployment validation..."
+          
+          # Verify all pods are running
+          FAILED_PODS=$(kubectl get pods -n ${{ env.KUBE_NAMESPACE }} --field-selector=status.phase!=Running,status.phase!=Succeeded --no-headers | wc -l)
+          
+          if [ "$FAILED_PODS" -gt 0 ]; then
+            echo "❌ Found $FAILED_PODS failed pods:"
+            kubectl get pods -n ${{ env.KUBE_NAMESPACE }} --field-selector=status.phase!=Running,status.phase!=Succeeded
+            exit 1
+          fi
+          
+          echo "✅ All pods are running successfully"
+          
+          # Show deployment summary
+          echo ""
+          echo "📊 Deployment Summary:"
+          kubectl get deployments -n ${{ env.KUBE_NAMESPACE }}
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "⚠️  Deployment failed - initiating automatic rollback"
+          
+          SERVICES=("api" "frontend" "rust-worker" "python-analytics")
+          
+          for service in "${SERVICES[@]}"; do
+            if kubectl get deployment $service -n ${{ env.KUBE_NAMESPACE }} > /dev/null 2>&1; then
+              echo "Rolling back $service..."
+              
+              kubectl rollout undo deployment/$service -n ${{ env.KUBE_NAMESPACE }}
+              
+              # Wait for rollback to complete
+              kubectl rollout status deployment/$service -n ${{ env.KUBE_NAMESPACE }} --timeout=180s || {
+                echo "⚠️  Rollback of $service timed out"
+              }
+            fi
+          done
+          
+          echo ""
+          echo "✅ Rollback completed"
+          echo "📊 Current deployment state:"
+          kubectl get deployments -n ${{ env.KUBE_NAMESPACE }}
+          
+          # Exit with error to mark workflow as failed
+          exit 1
+
+      - name: Create deployment record
+        if: success()
+        run: |
+          echo "Creating deployment record..."
+          
+          cat > deployment-record.json <<EOF
+          {
+            "version": "${{ needs.pre-deploy-checks.outputs.release_tag }}",
+            "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "git_sha": "${{ github.sha }}",
+            "workflow_run": "${{ github.run_number }}",
+            "deployed_by": "${{ github.actor }}",
+            "services": {
+              "api": "$(kubectl get deployment api -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.spec.template.spec.containers[0].image}')",
+              "frontend": "$(kubectl get deployment frontend -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.spec.template.spec.containers[0].image}')",
+              "rust-worker": "$(kubectl get deployment rust-worker -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.spec.template.spec.containers[0].image}')",
+              "python-analytics": "$(kubectl get deployment python-analytics -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.spec.template.spec.containers[0].image}')"
+            }
+          }
+          EOF
+          
+          echo "Deployment record:"
+          cat deployment-record.json
+
+      - name: Upload deployment record
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-record-${{ needs.pre-deploy-checks.outputs.release_tag }}
+          path: deployment-record.json
+          retention-days: 365
+
+  notify-deployment-status:
+    name: Notify Deployment Status
+    needs: [pre-deploy-checks, deploy-to-mainnet]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Deployment Success Notification
+        if: needs.deploy-to-mainnet.result == 'success'
+        run: |
+          echo "🎉 Deployment to mainnet succeeded!"
+          echo "Version: ${{ needs.pre-deploy-checks.outputs.release_tag }}"
+          echo "Status: ✅ All services healthy"
+
+      - name: Deployment Failure Notification
+        if: needs.deploy-to-mainnet.result == 'failure'
+        run: |
+          echo "❌ Deployment to mainnet failed!"
+          echo "Version: ${{ needs.pre-deploy-checks.outputs.release_tag }}"
+          echo "Status: Rolled back to previous version"
+          echo ""
+          echo "Check the deployment logs for details."
+          exit 1

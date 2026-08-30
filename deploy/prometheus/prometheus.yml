@@ -1,0 +1,45 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: local
+    project: afropay
+
+# ---------------------------------------------------------------------------
+# Alerting (stub — wire to Alertmanager when ready)
+# ---------------------------------------------------------------------------
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ["alertmanager:9093"]
+
+# ---------------------------------------------------------------------------
+# Scrape configurations
+# ---------------------------------------------------------------------------
+scrape_configs:
+
+  # NestJS API — exposes GET /metrics via prom-client
+  - job_name: afropay_api
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:3001"]
+        labels:
+          service: api
+          language: nodejs
+
+  # Rust worker — exposes GET /metrics via warp on METRICS_PORT (9898)
+  - job_name: afropay_rust_worker
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["rust-worker:9898"]
+        labels:
+          service: rust_worker
+          language: rust
+
+  # Prometheus self-scrape
+  - job_name: prometheus
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -14,21 +14,20 @@ tokio = { version = "1", features = ["full"] }
 redis = { version = "0.24", features = ["tokio-comp", "aio"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.11", features = ["json", "stream"] }
 stellar-base = "0.7"
-stellar-horizon = "0.7"
 thiserror = "1"
 anyhow = "1"
 chrono = "0.4"
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenv = "0.15"
 prometheus = "0.14"
 warp = "0.3"
 once_cell = "1"
-stellar_sdk = "0.4"
 sha2 = "0.10"
 stellar-strkey = "0.0.16"
 stellar-xdr = { version = "26.0.1", features = ["base64"] }
 ed25519-dalek = "2.2.0"
-
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "chrono"] }
+futures = "0.3"

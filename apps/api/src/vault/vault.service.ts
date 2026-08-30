@@ -46,7 +46,7 @@ export class VaultService {
     userId: string,
     unsignedTransactionXdr: string,
   ): Promise<DelegatedSigningResult> {
-    const wallet = await this.prisma.wallet.findUnique({
+    const wallet = await this.prisma.wallet.findFirst({
       where: { userId },
       select: { id: true, publicKey: true },
     });

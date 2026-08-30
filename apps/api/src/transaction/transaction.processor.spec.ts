@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuditService } from '../audit/audit.service';
+import { AuditLogService } from '../audit/audit.service';
 import { Logger } from 'nestjs-pino';
 import { TransactionProcessor } from './transaction.processor';
 import { FraudService } from './fraud.service';
@@ -29,12 +29,20 @@ const BASE_TRANSACTION = {
 };
 
 function makeMocks() {
+  // Stateful in-memory store: each update builds on the previous row state,
+  // mirroring how the real database returns the row after applying an update.
+  const rows = new Map<string, Record<string, any>>();
   const mockPrisma = {
     transaction: {
-      findUnique: jest.fn().mockResolvedValue({ ...BASE_TRANSACTION }),
-      update: jest.fn().mockImplementation(({ data }) =>
-        Promise.resolve({ ...BASE_TRANSACTION, ...data }),
+      findUnique: jest.fn().mockImplementation(({ where }: any) =>
+        Promise.resolve(rows.get(where.id) ?? { ...BASE_TRANSACTION, id: where.id }),
       ),
+      update: jest.fn().mockImplementation(({ where, data }: any) => {
+        const current = rows.get(where.id) ?? { ...BASE_TRANSACTION, id: where.id };
+        const next = { ...current, ...data };
+        rows.set(where.id, next);
+        return Promise.resolve(next);
+      }),
     },
   };
 
@@ -72,7 +80,7 @@ describe('TransactionProcessor', () => {
       providers: [
         TransactionProcessor,
         { provide: PrismaService, useValue: mocks.mockPrisma },
-        { provide: AuditService, useValue: mocks.mockAuditService },
+        { provide: AuditLogService, useValue: mocks.mockAuditService },
         { provide: Logger, useValue: mocks.mockLogger },
         { provide: FraudService, useValue: mocks.mockFraudService },
       ],
@@ -221,9 +229,11 @@ describe('TransactionProcessor', () => {
       await callProcess();
 
       expect(mocks.mockAuditService.log).toHaveBeenCalledWith(
-        BASE_TRANSACTION.userId,
-        'TRANSACTION_BLOCKED',
-        expect.objectContaining({ transactionId: BASE_TRANSACTION.id, riskScore: 0.9 }),
+        expect.objectContaining({
+          userId: BASE_TRANSACTION.userId,
+          operation: 'TRANSACTION_BLOCKED',
+          metadata: expect.objectContaining({ transactionId: BASE_TRANSACTION.id, riskScore: 0.9 }),
+        }),
       );
     });
 
@@ -280,9 +290,11 @@ describe('TransactionProcessor', () => {
       await callProcess();
 
       expect(mocks.mockAuditService.log).toHaveBeenCalledWith(
-        BASE_TRANSACTION.userId,
-        'TRANSACTION_PENDING_REVIEW',
-        expect.objectContaining({ transactionId: BASE_TRANSACTION.id, riskScore: 0.6 }),
+        expect.objectContaining({
+          userId: BASE_TRANSACTION.userId,
+          operation: 'TRANSACTION_PENDING_REVIEW',
+          metadata: expect.objectContaining({ transactionId: BASE_TRANSACTION.id, riskScore: 0.6 }),
+        }),
       );
     });
 
@@ -330,7 +342,7 @@ describe('TransactionProcessor', () => {
     it('emits TRANSACTION_INITIATE and TRANSACTION_COMPLETE audit events', async () => {
       await callProcess();
 
-      const eventNames = mocks.mockAuditService.log.mock.calls.map((c) => c[1]);
+      const eventNames = mocks.mockAuditService.log.mock.calls.map((c) => c[0].operation);
       expect(eventNames).toContain('TRANSACTION_INITIATE');
       expect(eventNames).toContain('TRANSACTION_COMPLETE');
     });
@@ -366,11 +378,13 @@ describe('TransactionProcessor', () => {
       await callProcess();
 
       expect(mocks.mockAuditService.log).toHaveBeenCalledWith(
-        BASE_TRANSACTION.userId,
-        'TRANSACTION_FAILED',
         expect.objectContaining({
-          transactionId: BASE_TRANSACTION.id,
-          reason: 'Fraud service unavailable',
+          userId: BASE_TRANSACTION.userId,
+          operation: 'TRANSACTION_FAILED',
+          metadata: expect.objectContaining({
+            transactionId: BASE_TRANSACTION.id,
+            reason: 'Fraud service unavailable',
+          }),
         }),
       );
     });

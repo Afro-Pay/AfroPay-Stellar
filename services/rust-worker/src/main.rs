@@ -1,45 +1,81 @@
 mod models;
-mod stellar;
 mod queue;
+mod rebalance;
+mod settlement;
+mod stellar;
 
 use dotenv::dotenv;
 use std::env;
-use stellar_sdk::Keypair;
-use stellar::StellarService;
 use models::TransactionJob;
 use queue::QueueService;
+use rebalance::{process_rebalance_job, rebalance_enabled};
+use settlement::{fetch_account_sequence, process_compliance_job, submit_xdr};
+use stellar::{build_payment_xdr, derive_public_key, PUBLIC_PASSPHRASE, TESTNET_PASSPHRASE};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
-    
-    println!("🚀 Starting Rust Worker with Multi-Signature Support");
-    
-    let stellar_service = StellarService::new();
-    let queue_service = QueueService::new().await?;
-    
-    // Load cosigner keypair (if configured)
-    let cosigner_keypair = if let Ok(cosigner_secret) = env::var("COSIGNER_SECRET") {
-        println!("✅ Cosigner keypair loaded from environment");
-        Some(Keypair::from_secret(&cosigner_secret)?)
-    } else {
-        println!("ℹ️ No cosigner key configured - multi-sig disabled");
-        None
-    };
-    
-    let threshold_usd = env::var("MULTISIG_THRESHOLD_USD")
-        .unwrap_or_else(|_| "10000".to_string())
-        .parse::<f64>()
-        .unwrap_or(10000.0);
-    
-    println!("📊 Multi-sig threshold: ${} USD", threshold_usd);
-    
-    // Process transactions from queue
+
+    println!("🚀 Starting Rust Worker with Compliance (Clawback/Freeze) Support");
+
+    let queue_service = QueueService::new()?;
+
+    // Compliance listener — processes freeze/clawback jobs concurrently with
+    // the payment loop. Jobs only arrive after the API's multi-sig threshold
+    // (2+ compliance officers) has been met.
+    let compliance_queue = queue_service.clone();
+    tokio::spawn(async move {
+        loop {
+            match compliance_queue.receive_compliance_job().await {
+                Ok(Some(job)) => {
+                    println!(
+                        "🛡️ Processing compliance job: {} ({})",
+                        job.action_id, job.action_type
+                    );
+                    if let Err(e) = process_compliance_job(&job).await {
+                        eprintln!("❌ Compliance job failed: {}", e);
+                    }
+                }
+                Ok(None) => {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+                Err(e) => {
+                    eprintln!("❌ Compliance queue error: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                }
+            }
+        }
+    });
+
+    // Liquidity rebalancing listener. It is intentionally independent of the
+    // payment loop so reserve maintenance cannot add latency to core payments.
+    if rebalance_enabled() {
+        let liquidity_queue = queue_service.clone();
+        tokio::spawn(async move {
+            loop {
+                match liquidity_queue.receive_liquidity_job().await {
+                    Ok(Some(job)) => {
+                        println!("💧 Processing liquidity rebalance: {} ({})", job.rebalance_id, job.corridor);
+                        if let Err(error) = process_rebalance_job(&job).await {
+                            eprintln!("❌ Liquidity rebalance {} failed: {}", job.rebalance_id, error);
+                        }
+                    }
+                    Ok(None) => tokio::time::sleep(tokio::time::Duration::from_millis(500)).await,
+                    Err(error) => {
+                        eprintln!("❌ Liquidity queue error: {}", error);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    }
+                }
+            }
+        });
+    }
+
+    // Payment processing loop
     loop {
         match queue_service.receive_job().await {
             Ok(Some(job)) => {
                 println!("📋 Processing job: {}", job.id);
-                if let Err(e) = process_job(&stellar_service, job, &cosigner_keypair, threshold_usd).await {
+                if let Err(e) = process_job(job).await {
                     eprintln!("❌ Job failed: {}", e);
                 }
             }
@@ -54,43 +90,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-async fn process_job(
-    stellar_service: &StellarService,
-    job: TransactionJob,
-    cosigner_keypair: &Option<Keypair>,
-    threshold_usd: f64,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn process_job(job: TransactionJob) -> Result<(), Box<dyn std::error::Error>> {
     // Load user's keypair (in production, securely retrieve from vault)
-    let user_secret = env::var("USER_SECRET_KEY")
-        .expect("USER_SECRET_KEY must be set");
-    let user_keypair = Keypair::from_secret(&user_secret)?;
-    
-    // Determine if cosign is required
-    let requires_cosign = job.requires_cosign;
-    
-    let config = stellar::SigningConfig {
-        requires_cosign,
-        user_keypair,
-        cosigner_keypair: cosigner_keypair.clone(),
+    let user_secret = env::var("USER_SECRET_KEY").expect("USER_SECRET_KEY must be set");
+    let network = env::var("STELLAR_NETWORK").unwrap_or_default();
+    let network_passphrase = if network == "mainnet" {
+        PUBLIC_PASSPHRASE
+    } else {
+        TESTNET_PASSPHRASE
     };
-    
-    // Build and sign transaction
-    let transaction = stellar_service.build_transaction(
-        &job.source_wallet,
-        &job.destination_wallet,
-        &job.amount,
-        &job.asset_code,
-        &job.asset_issuer,
-        job.memo.as_deref(),
-        &config,
-    ).await?;
-    
-    // Submit to network
-    let hash = stellar_service.submit_transaction(&transaction).await?;
-    
+    let horizon_url = env::var("STELLAR_HORIZON_URL")
+        .unwrap_or_else(|_| "https://horizon-testnet.stellar.org".to_string());
+
+    let source_public = derive_public_key(&user_secret)?;
+    let sequence = fetch_account_sequence(&horizon_url, &source_public).await?;
+
+    // Build and sign the payment envelope.
+    let xdr = build_payment_xdr(&job, &user_secret, sequence, network_passphrase)?;
+
+    // Submit to the network.
+    let hash = submit_xdr(&horizon_url, &xdr).await?;
+
     println!("✅ Transaction submitted successfully!");
     println!("   Hash: {}", hash);
-    println!("   Signatures: {}", if requires_cosign { 2 } else { 1 });
-    
+    println!("   Signatures: {}", if job.requires_cosign { 2 } else { 1 });
+
     Ok(())
 }

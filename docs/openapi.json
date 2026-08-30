@@ -1,0 +1,63 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AfroPay-Stellar API",
+    "description": "Cross-border remittance platform API built on Stellar blockchain. Supports secure wallet management, Stellar payments, KYC verification, and anchor integrations for fiat on/off ramps.\n\nThis specification is auto-generated from NestJS decorators and DTOs. To regenerate, run: `npm run start:dev` in the apps/api directory.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "AfroPay Team",
+      "url": "https://github.com/El-Chapo-Npm/AfroPay-Stellar"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Local Development"
+    },
+    {
+      "url": "https://api-staging.afropay.io",
+      "description": "Staging"
+    }
+  ],
+  "tags": [
+    {
+      "name": "auth",
+      "description": "Authentication and user registration"
+    },
+    {
+      "name": "wallet",
+      "description": "Stellar wallet management"
+    },
+    {
+      "name": "transaction",
+      "description": "Payment transactions and history"
+    },
+    {
+      "name": "kyc",
+      "description": "Know Your Customer verification"
+    },
+    {
+      "name": "anchor",
+      "description": "Stellar anchor integrations (SEP-6, SEP-24)"
+    },
+    {
+      "name": "audit",
+      "description": "Audit logs and compliance"
+    },
+    {
+      "name": "admin",
+      "description": "Administrative operations"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "JWT-auth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Enter JWT token"
+      }
+    }
+  },
+  "note": "This is a placeholder. The full OpenAPI specification will be generated when the API server starts in development mode. Run 'npm run start:dev' in apps/api directory to generate the complete spec."
+}

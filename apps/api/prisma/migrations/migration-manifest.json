@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Classifies every Prisma migration under apps/api/prisma/migrations as either 'safe' (additive, backward compatible while old and new API pods run side by side) or 'breaking' (removes/renames/narrows something the currently-running old pods still depend on). See docs/zero-downtime-migrations.md for the rules and the deploy sequencing that reads this file.",
+  "rules": [
+    "Every migration folder under apps/api/prisma/migrations MUST have an entry here before it can be deployed. scripts/migrate-classify.js fails closed if an entry is missing.",
+    "'breaking' migrations are applied by the post-deploy Job only, after old pods are fully drained.",
+    "At most one 'breaking' migration may be pending (not yet applied to the target database) at a time, and it must be the most recent pending migration. Split any change that would violate this into a safe expand step now and a breaking contract step in a later release.",
+    "Every 'breaking' migration MUST ship a down.sql in the same folder that reverses it, used by scripts/migrate-rollback.sh."
+  ],
+  "classifications": {
+    "20260624000000_add_wallet_fk_enum_indexes": "safe",
+    "20260625000000_add_kyc_record": "safe",
+    "20260626000000_add_wallet_envelope_encryption": "safe",
+    "20260720000000_add_transaction_idempotency_key": "safe",
+    "20260726000000_add_pending_review_status": "safe",
+    "20260819000000_add_compliance_anonymization": "safe",
+    "20260826010000_add_liquidity_rebalancing": "safe"
+  }
+}

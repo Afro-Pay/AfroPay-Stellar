@@ -2,6 +2,15 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 
+/** Shape of the JWT payload produced by both AuthService (email/password)
+ *  and Sep10Service (SEP-10 cryptographic auth). */
+interface JwtPayload {
+  sub: string;
+  email?: string;
+  stellarPublicKey?: string;
+  type?: string;
+}
+
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor() {

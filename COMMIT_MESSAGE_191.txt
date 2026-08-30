@@ -1,0 +1,43 @@
+feat(payment_registry): add deployment nonce to prevent replay attacks across redeployments
+
+Implements comprehensive replay attack protection for payment_registry contract
+by introducing a deployment nonce mechanism that ensures payment_id uniqueness
+across contract lifecycles.
+
+Problem:
+- Current implementation loses payment history on redeployment (fresh storage)
+- Attackers can replay old payment confirmations after contract redeployment
+- No cryptographic binding between payment_id and specific deployment
+
+Solution:
+- Generate unique 32-byte deployment nonce from deployer address + ledger timestamp
+- Construct composite storage keys combining nonce + payment_id
+- Store nonce in instance storage during initialization
+- Ensure same payment_id in different deployments creates different storage keys
+
+Changes:
+- Added DeploymentNonce to DataKey enum
+- Implemented generate_deployment_nonce() using SHA-256(deployer || timestamp)
+- Modified initialize() to generate and persist nonce
+- Updated register_payment() and get_payment() to use composite keys
+- Added get_deployment_nonce() public read function for diagnostics
+
+Testing:
+- Added test_deployment_nonce_prevents_replay() demonstrating fix
+- Added test_different_deployments_different_nonces() validating uniqueness
+- Added test_payment_id_collision_across_deployments() confirming isolation
+- Added test_backward_compatibility_v2_to_v3() ensuring no API breaks
+- All existing tests pass without modification
+
+Documentation:
+- Created docs/payment-registry-replay-protection.md with threat analysis
+- Updated docs/threat-model.md with TM-026: Payment Registry Replay Attack
+- Added inline code comments explaining nonce derivation and usage
+
+Security Impact:
+- Eliminates replay attack vector across redeployments
+- No breaking changes to public API (backward compatible)
+- Negligible performance impact (+32 bytes storage, +1 hash during init)
+- No new attack surfaces introduced
+
+Closes #191

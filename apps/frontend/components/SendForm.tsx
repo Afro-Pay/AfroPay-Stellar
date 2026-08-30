@@ -3,6 +3,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useWalletStore } from "../store/walletStore";
 import { SimulationResult } from "../lib/api";
 import AssetPicker from "./AssetPicker";
+import { queueOfflineDraft } from "../lib/syncEngine";
+import { getPendingCount } from "../lib/offlineQueue";
 
 export default function SendForm() {
   const queryClient = useQueryClient();
@@ -23,9 +25,40 @@ export default function SendForm() {
   const [lastSimulationTime, setLastSimulationTime] = useState<number>(0);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [addressConfirmation, setAddressConfirmation] = useState('');
+  const [isOffline, setIsOffline] = useState(false);
+  const [offlineCount, setOfflineCount] = useState(0);
+
+  useEffect(() => {
+    const updateConnectivity = () => setIsOffline(!navigator.onLine);
+    updateConnectivity();
+    window.addEventListener('online', updateConnectivity);
+    window.addEventListener('offline', updateConnectivity);
+    return () => {
+      window.removeEventListener('online', updateConnectivity);
+      window.removeEventListener('offline', updateConnectivity);
+    };
+  }, []);
+
+  // A malicious clipboard-hijacking extension can silently swap a copied
+  // Stellar address for its own. Requiring the user to actively retype the
+  // last 4 characters of whatever currently sits in the destination field
+  // forces a deliberate look at the real value about to be submitted.
+  const destinationSuffix = form.destinationPublicKey.trim().slice(-4).toUpperCase();
+  const isAddressConfirmed =
+    destinationSuffix.length === 4 &&
+    addressConfirmation.trim().toUpperCase() === destinationSuffix;
+
+  // Re-arm the confirmation whenever the destination actually changes, but
+  // not on every keystroke of an unrelated field and not on the periodic
+  // quote auto-refresh (same address, just a fresher rate).
+  useEffect(() => {
+    setAddressConfirmation('');
+  }, [form.destinationPublicKey]);
 
   const previewHeaderRef = useRef<HTMLHeadingElement>(null);
   const amountInputRef = useRef<HTMLInputElement>(null);
+  const simulationRequestRef = useRef(0);
 
   const handleSimulate = useCallback(async (isAutoRefresh = false) => {
     if (!form.destinationPublicKey || !form.amount) {
@@ -38,6 +71,7 @@ export default function SendForm() {
     }
     setFormError(null);
     clearError('send');
+    const requestId = ++simulationRequestRef.current;
     try {
       const result = await simulateTransfer({
         destinationPublicKey: form.destinationPublicKey,
@@ -45,6 +79,8 @@ export default function SendForm() {
         assetCode: form.assetCode,
         assetIssuer: form.assetIssuer,
       });
+
+      if (requestId !== simulationRequestRef.current) return;
 
       if (result.status === 'blocked') {
         const primaryIssue = result.issues?.find(i => i.code) || result.issues?.[0];
@@ -62,11 +98,9 @@ export default function SendForm() {
           }
         }
         setFormError(errMsg);
-        if (step === 'edit') {
-          setSimulation(null);
-        } else {
-          setCountdown(0);
-        }
+        setSimulation(result);
+        setCountdown(0);
+        setStep('preview');
       } else {
         setSimulation(result);
         setLastSimulationTime(Date.now());
@@ -79,16 +113,24 @@ export default function SendForm() {
         setStep('preview');
       }
     } catch (err: any) {
+      if (requestId !== simulationRequestRef.current) return;
       setFormError(err?.response?.data?.message || "Simulation failed. Please try again.");
-      if (step === 'edit') {
-        setSimulation(null);
-      } else {
-        setCountdown(0);
-      }
+      setSimulation(null);
+      setCountdown(0);
     } finally {
       setLoading(false);
     }
   }, [form, step, simulateTransfer, clearError]);
+
+  useEffect(() => {
+    if (step !== 'edit' || !form.destinationPublicKey || !form.amount) return;
+
+    const timer = setTimeout(() => {
+      void handleSimulate();
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [step, form.destinationPublicKey, form.amount, form.assetCode, form.assetIssuer, handleSimulate]);
 
   useEffect(() => {
     if (step !== 'preview' || !simulation || loading || countdown <= 0) return;
@@ -136,9 +178,10 @@ export default function SendForm() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isOffline) return; // Offline uses the dedicated "Queue Transfer Offline" button.
     if (step === 'edit') {
       handleSimulate();
-    } else if (step === 'preview' && simulation && countdown > 0) {
+    } else if (step === 'preview' && simulation?.status === 'ok' && countdown > 0 && isAddressConfirmed) {
       handleConfirm();
     }
   };
@@ -151,6 +194,29 @@ export default function SendForm() {
     clearError('send');
 
     try {
+      // If offline, queue the draft locally for later delivery.
+      if (!navigator.onLine) {
+        await queueOfflineDraft({
+          destinationPublicKey: form.destinationPublicKey,
+          amount: form.amount,
+          assetCode: form.assetCode,
+          assetIssuer: form.assetIssuer,
+          memo: form.memo,
+        });
+        setStep('edit');
+        setSimulation(null);
+        setStatusMessage('Transfer saved offline. It will be sent when you reconnect.');
+        setForm({
+          destinationPublicKey: "",
+          amount: "",
+          assetCode: "XLM",
+          assetIssuer: undefined,
+          memo: "",
+        });
+        getPendingCount().then(setOfflineCount);
+        return;
+      }
+
       await sendTransfer(form);
       setStep('edit');
       setSimulation(null);
@@ -188,12 +254,26 @@ export default function SendForm() {
     );
   };
 
+  const destinationAsset = simulation?.path[simulation.path.length - 1] ?? form.assetCode;
+  const canSend = simulation?.status === 'ok' && countdown > 0;
+
   return (
     <form onSubmit={handleSubmit} className="bg-gray-900 rounded-xl p-5 space-y-4 border border-gray-800 shadow-xl" aria-describedby="send-form-status">
       {(formError || sendError) && (
         <div role="alert" className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm rounded-lg p-3.5 space-y-1 animate-fade-in">
           <p className="font-semibold">{sendError ? 'Unable to submit transfer' : 'Unable to proceed'}</p>
           <p className="text-xs text-red-300/80">{sendError ?? formError}</p>
+        </div>
+      )}
+
+      {isOffline && !sendError && !formError && (
+        <div className="flex items-center gap-2.5 bg-amber-500/10 border border-amber-500/25 text-amber-300 text-sm rounded-lg px-3.5 py-3" role="status">
+          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 5a12 12 0 0 1 18 0M7 9a8 8 0 0 1 10 0M11 13a4 4 0 0 1 2 0m-2 7h.01" />
+          </svg>
+          <span className="text-xs">
+            You are offline. Transfers will be saved to the queue{offlineCount > 0 ? ` (${offlineCount} already queued)` : ''} and sent when the connection is restored.
+          </span>
         </div>
       )}
 
@@ -285,12 +365,53 @@ export default function SendForm() {
               onChange={(e) => setForm({ ...form, memo: e.target.value })}
             />
           </div>
-          <button
-            type="submit"
-            className="w-full bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 active:scale-[0.99] transition-all text-white rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 shadow-md shadow-indigo-600/20"
-          >
-            Preview Transfer
-          </button>
+          {isOffline ? (
+            <button
+              type="button"
+              onClick={async () => {
+                if (!form.destinationPublicKey || !form.amount) {
+                  setFormError("Please enter a destination public key and amount.");
+                  return;
+                }
+                setFormError(null);
+                clearError('send');
+                setIsSubmitting(true);
+                try {
+                  await queueOfflineDraft({
+                    destinationPublicKey: form.destinationPublicKey,
+                    amount: form.amount,
+                    assetCode: form.assetCode,
+                    assetIssuer: form.assetIssuer,
+                    memo: form.memo,
+                  });
+                  setStatusMessage('Transfer saved offline. It will be sent when you reconnect.');
+                  setForm({
+                    destinationPublicKey: "",
+                    amount: "",
+                    assetCode: "XLM",
+                    assetIssuer: undefined,
+                    memo: "",
+                  });
+                  getPendingCount().then(setOfflineCount);
+                } catch {
+                  setFormError('Failed to save the transfer offline. Please try again.');
+                } finally {
+                  setIsSubmitting(false);
+                }
+              }}
+              disabled={isSubmitting}
+              className="w-full bg-linear-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 active:scale-[0.99] transition-all text-white rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 shadow-md shadow-amber-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSubmitting ? 'Saving offline...' : 'Queue Transfer Offline'}
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="w-full bg-linear-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 active:scale-[0.99] transition-all text-white rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 shadow-md shadow-indigo-600/20"
+            >
+              Preview Transfer
+            </button>
+          )}
         </div>
       )}
 
@@ -312,11 +433,22 @@ export default function SendForm() {
                 ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse'
                 : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
             }`}>
-              {countdown <= 0 ? 'Quote expired' : `Quote expires in ${countdown}s`}
+              {simulation.status === 'blocked'
+                ? 'Transfer blocked'
+                : countdown <= 0
+                ? 'Quote expired'
+                : `Quote expires in ${countdown}s`}
             </div>
           </div>
 
           <div className="space-y-3 bg-gray-800/40 border border-gray-800 rounded-xl p-4 text-sm">
+            <div className="flex justify-between items-baseline border-b border-gray-800/50 pb-2">
+              <span className="text-gray-400 text-xs">Destination</span>
+              <span className="font-mono text-xs text-gray-200" title={form.destinationPublicKey}>
+                {form.destinationPublicKey.slice(0, 4)}…{form.destinationPublicKey.slice(-4)}
+              </span>
+            </div>
+
             <div className="flex justify-between items-baseline border-b border-gray-800/50 pb-2">
               <span className="text-gray-400 text-xs">Sending Amount</span>
               <span className="font-medium text-white">{form.amount} {form.assetCode}</span>
@@ -325,14 +457,21 @@ export default function SendForm() {
             <div className="flex justify-between items-baseline border-b border-gray-800/50 pb-2">
               <span className="text-gray-400 text-xs">Estimated Destination</span>
               <span className="font-semibold text-emerald-400 text-base">
-                {simulation.estimatedDestinationAmount} {form.assetCode}
+                {simulation.estimatedDestinationAmount ?? 'Unavailable'} {destinationAsset}
+              </span>
+            </div>
+
+            <div className="flex justify-between items-baseline border-b border-gray-800/50 pb-2">
+              <span className="text-gray-400 text-xs">Fee</span>
+              <span className="font-medium text-gray-200">
+                {simulation.path.length > 1 ? 'Included in FX rate above' : 'No fee — same-asset transfer'}
               </span>
             </div>
 
             <div className="flex justify-between items-baseline border-b border-gray-800/50 pb-2">
               <span className="text-gray-400 text-xs">Minimum Destination</span>
               <span className="font-medium text-gray-200">
-                {simulation.minimumDestinationAmount} {form.assetCode}
+                {simulation.minimumDestinationAmount ?? 'Unavailable'} {destinationAsset}
               </span>
             </div>
 
@@ -340,7 +479,7 @@ export default function SendForm() {
               <div className="flex justify-between items-baseline border-b border-gray-800/50 pb-2">
                 <span className="text-gray-400 text-xs">FX Effective Rate</span>
                 <span className="font-medium text-gray-200">
-                  1 {form.assetCode} = {simulation.effectiveRate.toFixed(4)} {form.assetCode}
+                  1 {form.assetCode} = {simulation.effectiveRate.toFixed(4)} {destinationAsset}
                 </span>
               </div>
             )}
@@ -353,6 +492,38 @@ export default function SendForm() {
             )}
           </div>
 
+          {simulation.issues.length > 0 && (
+            <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-300" role="status">
+              <p className="font-semibold">Simulation issues</p>
+              <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
+                {simulation.issues.map((issue, index) => <li key={`${issue.code}-${index}`}>{issue.message}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {countdown > 0 && (
+            <div>
+              <label htmlFor="destination-confirm" className="block text-xs font-medium text-gray-300 mb-1">
+                Confirm destination — type the last 4 characters
+              </label>
+              <input
+                id="destination-confirm"
+                name="destinationConfirm"
+                className="w-full bg-gray-800 rounded-lg p-3 text-sm font-mono uppercase tracking-widest outline-none border border-gray-700/50 text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                placeholder={destinationSuffix || '····'}
+                maxLength={4}
+                value={addressConfirmation}
+                onChange={(e) => setAddressConfirmation(e.target.value)}
+                autoComplete="off"
+                aria-describedby="destination-confirm-hint"
+              />
+              <p id="destination-confirm-hint" className="text-xs text-gray-500 mt-1">
+                Destination ends in <span className="font-mono text-gray-300">{destinationSuffix}</span>. Retyping it
+                guards against a clipboard extension silently swapping the address you pasted.
+              </p>
+            </div>
+          )}
+
           <div className="flex gap-2">
             <button
               type="button"
@@ -361,7 +532,7 @@ export default function SendForm() {
             >
               Modify
             </button>
-            {countdown <= 0 ? (
+            {countdown <= 0 && simulation.status === 'ok' ? (
               <button
                 type="button"
                 onClick={() => handleSimulate(false)}
@@ -373,9 +544,9 @@ export default function SendForm() {
             ) : (
               <button
                 type="submit"
-                disabled={isSubmitting || isLoadingSend}
+                disabled={isSubmitting || isLoadingSend || !canSend || !isAddressConfirmed}
                 aria-busy={isSubmitting || isLoadingSend}
-                className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] transition-all text-white rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300 shadow-md shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                className="flex-1 bg-linear-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] transition-all text-white rounded-lg p-3 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300 shadow-md shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {isSubmitting || isLoadingSend ? (
                   <>
@@ -391,6 +562,11 @@ export default function SendForm() {
               </button>
             )}
           </div>
+          {countdown > 0 && !isAddressConfirmed && (
+            <p className="text-xs text-amber-400/90 text-center -mt-1">
+              Type the last 4 characters of the destination address above to enable sending.
+            </p>
+          )}
         </div>
       )}
 
@@ -401,4 +577,4 @@ export default function SendForm() {
       )}
     </form>
   );
-}
+};
