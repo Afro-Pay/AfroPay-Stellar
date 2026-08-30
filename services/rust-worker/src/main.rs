@@ -3,6 +3,7 @@ mod queue;
 mod rebalance;
 mod settlement;
 mod stellar;
+mod path_routing;
 
 use dotenv::dotenv;
 use std::env;
@@ -11,6 +12,7 @@ use queue::QueueService;
 use rebalance::{process_rebalance_job, rebalance_enabled};
 use settlement::{fetch_account_sequence, process_compliance_job, submit_xdr};
 use stellar::{build_payment_xdr, derive_public_key, PUBLIC_PASSPHRASE, TESTNET_PASSPHRASE};
+use path_routing::{ArbitrageConfig, run_arbitrage_daemon};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
