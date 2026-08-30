@@ -21,11 +21,24 @@ pub struct SigningResult {
     pub required_signatures: usize,
 }
 
-/// A compliance job published by the NestJS API onto the `compliance_jobs`
-/// Redis list once the mandatory multi-sig approval threshold is met.
-///
-/// Deliberately contains NO secret material — the worker loads the signing
-/// (issuer / compliance treasury) key from its own environment.
+/// A liquidity rebalance job published by the NestJS API onto the
+/// `liquidity_rebalance_jobs` Redis list. It contains no secret material.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiquidityRebalanceJob {
+    pub rebalance_id: String,
+    pub corridor: String,
+    pub from_asset: String,
+    pub to_asset: String,
+    pub source_amount: String,
+    pub destination_min_amount: String,
+    pub treasury_account: String,
+    pub destination_account: String,
+    pub from_asset_issuer: String,
+    pub to_asset_issuer: String,
+    pub network: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComplianceJob {
     pub action_id: String,

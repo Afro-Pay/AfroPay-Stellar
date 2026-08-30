@@ -96,6 +96,81 @@ pub fn build_payment_xdr(
     .map_err(Into::into)
 }
 
+/// Build and sign a strict-send path payment from the treasury into a
+/// corridor reserve account. The path is empty so the Stellar orderbook or
+/// Soroban router can determine the conversion between the two assets.
+pub fn build_path_payment_strict_send_xdr(
+    source_account: &str,
+    destination_account: &str,
+    send_amount: &str,
+    dest_min_amount: &str,
+    send_asset_code: &str,
+    send_asset_issuer: &str,
+    dest_asset_code: &str,
+    dest_asset_issuer: &str,
+    sequence: i64,
+    source_secret: &str,
+    network_passphrase: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    use ed25519_dalek::{Signer, SigningKey};
+    use sha2::{Digest, Sha256};
+    use stellar_strkey::ed25519::{PrivateKey, PublicKey};
+    use stellar_xdr::curr::{
+        DecoratedSignature, Limits, Memo, MuxedAccount, Operation as XdrOperation,
+        OperationBody, PathPaymentStrictSendOp, Preconditions, SequenceNumber, Signature,
+        SignatureHint, TimeBounds, TimePoint, Transaction as XdrTransaction,
+        TransactionEnvelope, TransactionExt, TransactionV1Envelope, Uint256, WriteXdr,
+    };
+
+    let secret = PrivateKey::from_string(source_secret)?;
+    let signing_key = SigningKey::from_bytes(&secret.0);
+    let source_public = PublicKey::from_string(source_account)?;
+    let destination = PublicKey::from_string(destination_account)?;
+    if derive_public_key(source_secret)? != source_account {
+        return Err("source account does not match signing secret".into());
+    }
+
+    let tx = XdrTransaction {
+        source_account: MuxedAccount::Ed25519(Uint256(source_public.0)),
+        fee: BASE_FEE_STROOPS,
+        seq_num: SequenceNumber(sequence + 1),
+        cond: Preconditions::Time(TimeBounds {
+            min_time: TimePoint(0),
+            max_time: TimePoint(chrono::Utc::now().timestamp() as u64 + 300),
+        }),
+        memo: Memo::None,
+        operations: vec![XdrOperation {
+            source_account: None,
+            body: OperationBody::PathPaymentStrictSend(PathPaymentStrictSendOp {
+                send_asset: build_xdr_asset(send_asset_code, send_asset_issuer)?,
+                send_amount: parse_stellar_amount(send_amount)?,
+                destination: MuxedAccount::Ed25519(Uint256(destination.0)),
+                dest_asset: build_xdr_asset(dest_asset_code, dest_asset_issuer)?,
+                dest_min: parse_stellar_amount(dest_min_amount)?,
+                path: Vec::new().try_into()?,
+            }),
+        }]
+        .try_into()?,
+        ext: TransactionExt::V0,
+    };
+
+    let network_id: [u8; 32] = Sha256::digest(network_passphrase.as_bytes()).into();
+    let tx_hash = tx.hash(network_id)?;
+    let signature = signing_key.sign(&tx_hash).to_bytes().to_vec().try_into()?;
+    let hint = SignatureHint(signing_key.verifying_key().to_bytes()[28..32].try_into()?);
+
+    TransactionEnvelope::Tx(TransactionV1Envelope {
+        tx,
+        signatures: vec![DecoratedSignature {
+            hint,
+            signature: Signature(signature),
+        }]
+        .try_into()?,
+    })
+    .to_xdr_base64(Limits::none())
+    .map_err(Into::into)
+}
+
 pub(crate) fn build_xdr_asset(
     code: &str,
     issuer: &str,

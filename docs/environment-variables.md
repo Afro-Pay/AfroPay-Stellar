@@ -28,6 +28,16 @@ All environment variables used across AfroPay-Stellar services, their defaults, 
 | `RPC_REQUEST_TIMEOUT_MS` | Timeout for RPC health and REST/JSON-RPC calls | `5000` | No | No |
 | `ANCHOR_USDC_URL` | SEP-6 anchor URL for USDC deposits/withdrawals | `https://testanchor.stellar.org` | No | No |
 | `ANCHOR_NGN_URL` | SEP-6 anchor URL for NGN deposits/withdrawals | `https://testanchor.stellar.org` | No | No |
+| `RATE_LIMIT_MAX` | Global fallback request limit for any `@RateLimit()`-decorated route that doesn't set its own `limitEnv` | `60` | No | No |
+| `RATE_LIMIT_WINDOW_MS` | Global fallback rate-limit window (ms), same fallback rules as `RATE_LIMIT_MAX` | `60000` | No | No |
+| `PUBLIC_API_RATE_LIMIT_MAX` | Request limit for `POST /transaction/send` | `20` | No | No |
+| `PUBLIC_API_RATE_LIMIT_WINDOW_MS` | Rate-limit window (ms) for `POST /transaction/send` | `60000` | No | No |
+| `WALLET_BALANCES_RATE_LIMIT_MAX` | Per-user request limit for `GET /wallet/balances` (proxies to Stellar Horizon) | `10` | No | No |
+| `WALLET_BALANCES_RATE_LIMIT_WINDOW_MS` | Rate-limit window (ms) for `GET /wallet/balances` | `60000` | No | No |
+| `ANCHOR_FX_RATE_RATE_LIMIT_MAX` | Per-user request limit for `GET /anchor/fx-rate` | `10` | No | No |
+| `ANCHOR_FX_RATE_RATE_LIMIT_WINDOW_MS` | Rate-limit window (ms) for `GET /anchor/fx-rate` | `60000` | No | No |
+| `ANCHOR_AUTH_RATE_LIMIT_MAX` | Per-IP request limit for the unauthenticated `GET /anchor/auth/challenge` and `POST /anchor/auth/token` SEP-10 endpoints | `20` | No | No |
+| `ANCHOR_AUTH_RATE_LIMIT_WINDOW_MS` | Rate-limit window (ms) for the anchor-auth endpoints above | `60000` | No | No |
 
 ## Frontend (`apps/frontend/`)
 

@@ -129,11 +129,29 @@ export const envValidationSchema = Joi.object({
       'string.uri': '"ANCHOR_NGN_URL" must be a valid URL',
       'any.required': '"ANCHOR_NGN_URL" is required',
     }),
+
+  LIQUIDITY_REBALANCING_ENABLED: Joi.boolean().truthy('true').falsy('false').default(true),
+  LIQUIDITY_CHECK_INTERVAL_MS: Joi.number().integer().min(60_000).default(3_600_000),
+  LIQUIDITY_CORRIDORS: Joi.string().default('USDC:NGN,USDC:GHS'),
+  LIQUIDITY_DEFAULT_WEEKLY_DEMAND: Joi.number().min(0).default(0),
+  LIQUIDITY_DEFAULT_RATE: Joi.number().greater(0).default(1),
+  LIQUIDITY_MAX_DAILY_REBALANCES: Joi.number().integer().greater(0).default(3),
+  LIQUIDITY_MAX_DAILY_AMOUNT: Joi.number().greater(0).default(100_000),
+  LIQUIDITY_MOCK_RESERVES: Joi.string().default('{}'),
+  LIQUIDITY_ASSET_ISSUERS: Joi.string().default('{}'),
+  LIQUIDITY_RESERVE_ACCOUNTS: Joi.string().default('{}'),
+  LIQUIDITY_TREASURY_PUBLIC_KEY: Joi.string().pattern(/^G[2-9A-Za-z]{55}$/).optional(),
+  LIQUIDITY_TREASURY_SECRET_KEY: Joi.string().pattern(/^S[2-9A-Za-z]{55}$/).optional(),
+  LIQUIDITY_QUEUE_NAME: Joi.string().default('liquidity_rebalance_jobs'),
+  LIQUIDITY_RESULT_URL: Joi.string().uri({ scheme: ['http', 'https'] }).optional(),
+  LIQUIDITY_WORKER_TOKEN: Joi.string().min(16).optional(),
 })
   .or('KMS_KEY_ID', 'ENCRYPTION_KEY')
   .with('KMS_KEY_ID', 'AWS_REGION')
   .with('SIGNER_URL', 'SIGNER_AUTH_TOKEN')
-  .with('SIGNER_AUTH_TOKEN', 'SIGNER_URL');
+  .with('SIGNER_AUTH_TOKEN', 'SIGNER_URL')
+  .with('LIQUIDITY_RESULT_URL', 'LIQUIDITY_WORKER_TOKEN')
+  .with('LIQUIDITY_WORKER_TOKEN', 'LIQUIDITY_RESULT_URL');
 
 function validateWeightedUrlList(value: string, helpers: Joi.CustomHelpers, name: string) {
   const entries = value

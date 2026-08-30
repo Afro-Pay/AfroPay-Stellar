@@ -9,6 +9,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { AdminModule } from './admin/admin.module';
 import { SorobanModule } from './soroban/soroban.module';
 import { ComplianceModule } from './transaction/compliance.module';
+import { LiquidityModule } from './reconciliation/liquidity.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { ComplianceModule } from './transaction/compliance.module';
     AdminModule,
     SorobanModule,
     ComplianceModule,
+    LiquidityModule,
   ],
   controllers: [],
   providers: [],
