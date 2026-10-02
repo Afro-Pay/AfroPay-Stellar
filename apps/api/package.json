@@ -2,9 +2,9 @@
   "name": "remitx-api",
   "version": "1.0.0",
   "scripts": {
-    "start:dev": "nest start --watch",
-    "start": "node dist/main",
-    "build": "nest build",
+    "start:dev": "node init && nest start --watch",
+    "start": "node init && node dist/main",
+    "build": "node init && nest build",
     "test": "jest --passWithNoTests",
     "test:adversarial": "jest --runInBand test/adversarial",
     "test:e2e": "jest --config jest.e2e.json --runInBand --forceExit",
