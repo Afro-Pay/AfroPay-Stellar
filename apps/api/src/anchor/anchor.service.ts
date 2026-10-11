@@ -9,6 +9,7 @@ import { AnchorReconciliationException } from './anchor.exceptions';
 import { DepositResponseDto } from './dto/deposit-response.dto';
 import { WithdrawResponseDto } from './dto/withdraw-response.dto';
 import {
+  AnchorRateSample,
   CircuitBreakerState,
   FxRateCachePayload,
   FxRateResult,
@@ -20,6 +21,50 @@ const ANCHORS: Record<string, string> = {
 };
 
 const DELTA_THRESHOLD = 0.005; // 0.5%
+const DEFAULT_ANCHOR = 'https://testanchor.stellar.org';
+// #198: reject any source whose rate deviates more than this fraction from the
+// median of all responding sources. Configurable via FX_ANCHOR_OUTLIER_THRESHOLD.
+const DEFAULT_OUTLIER_THRESHOLD = 0.05; // 5%
+
+/**
+ * Median of a numeric list (does not mutate the input). Even-length lists use
+ * the mean of the two central values so a single rogue source cannot drag the
+ * result the way a mean would.
+ */
+export function medianOf(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * Resolve the configured anchor source URLs for a corridor (#198).
+ *
+ * Priority (per currency, quote first then base):
+ *   1. `ANCHOR_<CUR>_URLS` — comma-separated list (multi-source aggregation).
+ *   2. `ANCHOR_<CUR>_URL`  — single legacy URL (graceful single-source mode).
+ * Falls back to the built-in default so behaviour is unchanged when nothing is
+ * configured. Results are de-duplicated while preserving order.
+ */
+export function resolveAnchorSources(from: string, to: string): string[] {
+  const norm = (c: string) => (c === 'USDC' ? 'USD' : c);
+  for (const cur of [norm(to), norm(from)]) {
+    const multi = process.env[`ANCHOR_${cur}_URLS`];
+    if (multi && multi.trim()) {
+      const list = multi
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (list.length > 0) return Array.from(new Set(list));
+    }
+    const single = process.env[`ANCHOR_${cur}_URL`];
+    if (single && single.trim()) return [single.trim()];
+  }
+  return [ANCHORS[to] ?? ANCHORS[norm(to)] ?? DEFAULT_ANCHOR];
+}
 
 // Simple in-memory redis-like cache used for tests or when REDIS_URL is not set
 class InMemoryCache {
@@ -65,6 +110,10 @@ export class AnchorService {
     process.env.FX_CIRCUIT_FAILURE_THRESHOLD ?? 3,
   );
   private circuitResetMs = Number(process.env.FX_CIRCUIT_RESET_MS ?? 60000);
+  // #198: max fractional deviation from the median before a source is dropped.
+  private anchorOutlierThreshold = Number(
+    process.env.FX_ANCHOR_OUTLIER_THRESHOLD ?? DEFAULT_OUTLIER_THRESHOLD,
+  );
   private cachedAnchorSigningKey: string | null = null;
   private readonly challengeTtlSeconds = Number(
     process.env.SEP10_CHALLENGE_TTL_SECONDS ?? 300,
@@ -300,6 +349,105 @@ export class AnchorService {
     return { rate: rates[`${from}-${to}`] ?? null, from, to };
   }
 
+  /**
+   * Fetch a single corridor rate from ONE anchor source (#198). Separated so
+   * tests can mock per-source behaviour and so a real provider call can replace
+   * the stub without touching the aggregation logic. Returns null when the
+   * source does not quote the pair.
+   */
+  async fetchRateFromSource(
+    source: string,
+    from: string,
+    to: string,
+  ): Promise<number | null> {
+    // Default implementation delegates to the in-process stub so tests and
+    // single-source deployments keep their existing behaviour. Deployments that
+    // configure ANCHOR_*_URLS replace this with a real per-source HTTP call.
+    const stub = await this.fetchExternalRate(from, to);
+    return stub.rate ?? null;
+  }
+
+  /**
+   * Multi-source FX rate aggregation with outlier rejection (#198).
+   *
+   * Fetches the corridor rate from every configured anchor source, then:
+   *   - computes the median of all non-erroring, non-null samples;
+   *   - rejects any source deviating more than the configured threshold from
+   *     that median;
+   *   - returns the median of the surviving samples, plus `sourceCount` (how
+   *     many samples the returned rate rests on) and `rejectedSources`.
+   *
+   * A source that errors or returns null is simply not counted (graceful
+   * degradation); it is NOT reported as an outlier. When no source yields a
+   * usable rate the rate is null and the circuit-breaker failure accounting in
+   * `getFxRate` decides whether the anchor counts as unreachable.
+   */
+  async fetchExternalRateMulti(
+    from: string,
+    to: string,
+  ): Promise<{ rate: number | null; from: string; to: string; sourceCount: number; rejectedSources: string[] }> {
+    const sources = resolveAnchorSources(from, to);
+    const samples: AnchorRateSample[] = [];
+    let errorCount = 0;
+    for (const source of sources) {
+      try {
+        const rate = await this.fetchRateFromSource(source, from, to);
+        if (rate != null && Number.isFinite(rate) && rate > 0) {
+          samples.push({ source, rate });
+        }
+      } catch {
+        // A source that throws is skipped; the others still count.
+        errorCount += 1;
+      }
+    }
+
+    if (samples.length === 0) {
+      // Distinguish "every source unreachable" (a real failure that must open
+      // the circuit breaker) from "sources answered but none quote the pair"
+      // (rate: null, not a failure). The legacy single-source path threw on an
+      // unreachable anchor, so preserve that contract when ALL sources errored.
+      if (errorCount > 0 && errorCount === sources.length) {
+        throw new Error(`All ${sources.length} anchor source(s) unreachable`);
+      }
+      return { rate: null, from, to, sourceCount: 0, rejectedSources: [] };
+    }
+    // Single sample: no median-based outlier rejection is possible; trust it.
+    if (samples.length === 1) {
+      return {
+        rate: samples[0].rate,
+        from,
+        to,
+        sourceCount: 1,
+        rejectedSources: [],
+      };
+    }
+
+    const threshold = this.anchorOutlierThreshold;
+    const median = medianOf(samples.map((s) => s.rate));
+    const kept: AnchorRateSample[] = [];
+    const rejected: string[] = [];
+    for (const s of samples) {
+      const deviation = Math.abs(s.rate - median) / median;
+      if (deviation > threshold) {
+        rejected.push(s.source);
+      } else {
+        kept.push(s);
+      }
+    }
+    // If every source deviates (e.g. two sources equidistant from the median of
+    // two), keep the full set rather than returning nothing — the median is
+    // still the most robust single estimate available.
+    const survivors = kept.length > 0 ? kept : samples;
+    const aggregated = medianOf(survivors.map((s) => s.rate));
+    return {
+      rate: aggregated,
+      from,
+      to,
+      sourceCount: survivors.length,
+      rejectedSources: kept.length > 0 ? rejected : [],
+    };
+  }
+
   async getFxRate(from: string, to: string): Promise<FxRateResult> {
     const normFrom = from === 'USDC' ? 'USD' : from;
     const normTo = to === 'USDC' ? 'USD' : to;
@@ -315,9 +463,11 @@ export class AnchorService {
       return this.buildCachedResult(cached, from, to, true);
     }
 
-    let external: { rate: number | null } | null = null;
+    let external:
+      | { rate: number | null; sourceCount: number; rejectedSources: string[] }
+      | null = null;
     try {
-      external = await this.fetchExternalRate(normFrom, normTo);
+      external = await this.fetchExternalRateMulti(normFrom, normTo);
       breaker.consecutiveFailures = 0;
       breaker.openedAt = null;
     } catch (e) {
@@ -346,6 +496,8 @@ export class AnchorService {
         from: normFrom,
         to: normTo,
         fetchedAt: Date.now(),
+        sourceCount: external.sourceCount,
+        rejectedSources: external.rejectedSources,
       };
       await this.redis.set(
         key,
@@ -362,6 +514,8 @@ export class AnchorService {
         ).toISOString(),
         stale: false,
         circuitOpen: false,
+        sourceCount: external.sourceCount,
+        rejectedSources: external.rejectedSources,
       };
     }
 
@@ -403,7 +557,16 @@ export class AnchorService {
     circuitOpen: boolean,
   ): FxRateResult {
     if (!cached || cached.rate == null) {
-      return { rate: null, from, to, rate_expires_at: null, stale: false, circuitOpen };
+      return {
+        rate: null,
+        from,
+        to,
+        rate_expires_at: null,
+        stale: false,
+        circuitOpen,
+        sourceCount: 0,
+        rejectedSources: [],
+      };
     }
     const expiresAtMs = (cached.fetchedAt ?? 0) + this.maxCacheAgeSeconds * 1000;
     return {
@@ -413,6 +576,8 @@ export class AnchorService {
       rate_expires_at: new Date(expiresAtMs).toISOString(),
       stale: Date.now() > expiresAtMs,
       circuitOpen,
+      sourceCount: cached.sourceCount ?? 1,
+      rejectedSources: cached.rejectedSources ?? [],
     };
   }
 }

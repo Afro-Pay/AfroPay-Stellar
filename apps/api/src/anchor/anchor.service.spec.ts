@@ -4,7 +4,7 @@ jest.mock('axios', () => ({
 }));
 
 import axios from 'axios';
-import { AnchorService } from './anchor.service';
+import { AnchorService, medianOf, resolveAnchorSources } from './anchor.service';
 import { AnchorReconciliationException } from './anchor.exceptions';
 
 const mockedAxios = axios as unknown as { get: jest.Mock };
@@ -216,6 +216,140 @@ describe('AnchorService', () => {
       }
       // Breaker never opens: the anchor is still consulted on every call.
       expect(stubFetch).toHaveBeenCalledTimes(5);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Multi-source FX aggregation with outlier rejection (#198)
+  // -------------------------------------------------------------------------
+  describe('multi-source FX aggregation (#198)', () => {
+    const SRC_A = 'https://anchor-a.example';
+    const SRC_B = 'https://anchor-b.example';
+    const SRC_C = 'https://anchor-c.example';
+
+    beforeEach(() => {
+      delete process.env.ANCHOR_USD_URLS;
+      delete process.env.ANCHOR_USD_URL;
+      delete process.env.ANCHOR_NGN_URLS;
+      delete process.env.ANCHOR_NGN_URL;
+    });
+
+    afterEach(() => {
+      delete process.env.ANCHOR_USD_URLS;
+      delete process.env.ANCHOR_USD_URL;
+      delete process.env.ANCHOR_NGN_URLS;
+      delete process.env.ANCHOR_NGN_URL;
+    });
+
+    it('medianOf handles odd and even lists without mutating input', () => {
+      const input = [3, 1, 2];
+      expect(medianOf(input)).toBe(2);
+      expect(input).toEqual([3, 1, 2]); // unchanged
+      expect(medianOf([10, 20, 30, 40])).toBe(25);
+      expect(medianOf([])).toBe(0);
+    });
+
+    it('resolveAnchorSources prefers the comma-separated list and de-dupes', () => {
+      process.env.ANCHOR_NGN_URLS = `${SRC_A}, ${SRC_B} ,${SRC_A}`;
+      expect(resolveAnchorSources('USD', 'NGN')).toEqual([SRC_A, SRC_B]);
+    });
+
+    it('resolveAnchorSources falls back to the single legacy URL', () => {
+      process.env.ANCHOR_NGN_URL = SRC_A;
+      expect(resolveAnchorSources('USD', 'NGN')).toEqual([SRC_A]);
+    });
+
+    it('aggregates the median of agreeing sources and reports sourceCount', async () => {
+      process.env.ANCHOR_NGN_URLS = `${SRC_A},${SRC_B},${SRC_C}`;
+      const bySource: Record<string, number> = { [SRC_A]: 1550, [SRC_B]: 1552, [SRC_C]: 1548 };
+      (service as any).fetchRateFromSource = async (s: string) => bySource[s];
+
+      const res = await service.getFxRate('USD', 'NGN');
+      expect(res.rate).toBe(1550);
+      expect(res.sourceCount).toBe(3);
+      expect(res.rejectedSources).toEqual([]);
+    });
+
+    it('rejects a single outlier source and excludes it from the median', async () => {
+      process.env.ANCHOR_NGN_URLS = `${SRC_A},${SRC_B},${SRC_C}`;
+      // SRC_C is a compromised anchor feeding a wildly wrong rate.
+      const bySource: Record<string, number> = { [SRC_A]: 1550, [SRC_B]: 1552, [SRC_C]: 9999 };
+      (service as any).fetchRateFromSource = async (s: string) => bySource[s];
+
+      const res = await service.getFxRate('USD', 'NGN');
+      expect(res.rate).toBe(1551); // median of {1550,1552}
+      expect(res.sourceCount).toBe(2);
+      expect(res.rejectedSources).toEqual([SRC_C]);
+    });
+
+    it('honours a configurable outlier threshold', async () => {
+      process.env.ANCHOR_NGN_URLS = `${SRC_A},${SRC_B},${SRC_C}`;
+      (service as any).anchorOutlierThreshold = 0.001; // 0.1%
+      const bySource: Record<string, number> = { [SRC_A]: 1550, [SRC_B]: 1552, [SRC_C]: 1550 };
+      (service as any).fetchRateFromSource = async (s: string) => bySource[s];
+
+      const res = await service.getFxRate('USD', 'NGN');
+      expect(res.rejectedSources).toContain(SRC_B); // 1552 deviates >0.1% from median 1550
+    });
+
+    it('skips a source that throws but still serves the others', async () => {
+      process.env.ANCHOR_NGN_URLS = `${SRC_A},${SRC_B}`;
+      (service as any).fetchRateFromSource = async (s: string) => {
+        if (s === SRC_A) throw new Error('down');
+        return 1550;
+      };
+
+      const res = await service.getFxRate('USD', 'NGN');
+      expect(res.rate).toBe(1550);
+      expect(res.sourceCount).toBe(1);
+    });
+
+    it('treats a lone source as authoritative (no outlier rejection possible)', async () => {
+      process.env.ANCHOR_NGN_URL = SRC_A;
+      (service as any).fetchRateFromSource = async () => 1550;
+
+      const res = await service.getFxRate('USD', 'NGN');
+      expect(res.rate).toBe(1550);
+      expect(res.sourceCount).toBe(1);
+      expect(res.rejectedSources).toEqual([]);
+    });
+
+    it('counts the corridor as a failure only when EVERY source errors', async () => {
+      process.env.ANCHOR_NGN_URLS = `${SRC_A},${SRC_B}`;
+      (service as any).fetchRateFromSource = async () => {
+        throw new Error('all down');
+      };
+
+      const res = await service.getFxRate('USD', 'NGN');
+      // No cache, no source answered → null rate, and the breaker advanced.
+      expect(res.rate).toBeNull();
+      expect((service as any).getBreaker('fx:USD:NGN').consecutiveFailures).toBe(1);
+    });
+
+    it('does not count "no source quotes the pair" as a failure', async () => {
+      process.env.ANCHOR_NGN_URLS = `${SRC_A},${SRC_B}`;
+      (service as any).fetchRateFromSource = async () => null;
+
+      const res = await service.getFxRate('EUR', 'JPY');
+      expect(res.rate).toBeNull();
+      expect((service as any).getBreaker('fx:EUR:JPY').consecutiveFailures).toBe(0);
+    });
+
+    it('persists and replays sourceCount/rejectedSources from cache', async () => {
+      process.env.ANCHOR_NGN_URLS = `${SRC_A},${SRC_B},${SRC_C}`;
+      const bySource: Record<string, number> = { [SRC_A]: 1550, [SRC_B]: 1552, [SRC_C]: 9999 };
+      (service as any).fetchRateFromSource = async (s: string) => bySource[s];
+
+      const first = await service.getFxRate('USD', 'NGN');
+      expect(first.sourceCount).toBe(2);
+
+      // Make the anchor unreachable: the cached result (with its metadata) is served.
+      (service as any).fetchRateFromSource = async () => {
+        throw new Error('down');
+      };
+      const second = await service.getFxRate('USD', 'NGN');
+      expect(second.sourceCount).toBe(2);
+      expect(second.rejectedSources).toEqual([SRC_C]);
     });
   });
 
