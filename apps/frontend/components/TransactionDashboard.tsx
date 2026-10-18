@@ -1,6 +1,10 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useTransactions } from '../hooks/useWalletData';
-import TransactionFilters from './TransactionFilters';
+import TransactionFilters, {
+  DEFAULT_FILTERS,
+  filterTransactions,
+  type TransactionFilterState,
+} from './TransactionFilters';
 import TransactionRow from './TransactionRow';
 import { Loader2, Inbox } from 'lucide-react';
 import WalletCacheStatus from './WalletCacheStatus';
@@ -16,30 +20,36 @@ export default function TransactionDashboard() {
   const { data: transactions = [], isLoading: loading } = useTransactions();
   const transactionsUpdatedAt = useWalletStore((state) => state.transactionsUpdatedAt);
 
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [currencyFilter, setCurrencyFilter] = useState('all');
-  const [dateRangeFilter, setDateRangeFilter] = useState('all');
+  const [filters, setFilters] = useState<TransactionFilterState>(DEFAULT_FILTERS);
 
-  // Reset filters when component mounts to ensure clean state
-  useEffect(() => {
-    // No-op: just ensuring filters are in consistent state
-  }, [statusFilter, currencyFilter, dateRangeFilter]);
+  const handleFilterChange = (patch: Partial<TransactionFilterState>) => {
+    setFilters((prev) => ({ ...prev, ...patch }));
+  };
+
+  const handleReset = () => {
+    setFilters(DEFAULT_FILTERS);
+  };
+
+  // Derive the set of asset codes present in the fetched transactions.
+  const availableAssets = useMemo(() => {
+    const assets = new Set<string>();
+    transactions.forEach((tx) => {
+      if (tx.assetCode) assets.add(tx.assetCode);
+    });
+    return Array.from(assets).sort();
+  }, [transactions]);
 
   // Client-side filtering of the current server page.
-  const filteredTransactions = useMemo(() => {
-    return transactions.filter((tx) => {
-      if (statusFilter !== 'all' && tx.status !== statusFilter) return false;
-      if (currencyFilter !== 'all' && tx.assetCode !== currencyFilter) return false;
-      if (dateRangeFilter !== 'all') {
-        const txDate = new Date(tx.createdAt).getTime();
-        const now = Date.now();
-        const diffDays = (now - txDate) / (1000 * 3600 * 24);
-        if (dateRangeFilter === '7d' && diffDays > 7) return false;
-        if (dateRangeFilter === '30d' && diffDays > 30) return false;
-      }
-      return true;
-    });
-  }, [transactions, statusFilter, currencyFilter, dateRangeFilter]);
+  const filteredTransactions = useMemo(
+    () => filterTransactions(transactions, filters),
+    [transactions, filters],
+  );
+
+  const hasActiveFilters = useMemo(
+    () =>
+      JSON.stringify(filters) !== JSON.stringify(DEFAULT_FILTERS),
+    [filters],
+  );
 
 
   if (loading && transactions.length === 0) {
@@ -64,12 +74,10 @@ export default function TransactionDashboard() {
       </div>
 
       <TransactionFilters
-        statusFilter={statusFilter}
-        setStatusFilter={setStatusFilter}
-        currencyFilter={currencyFilter}
-        setCurrencyFilter={setCurrencyFilter}
-        dateRangeFilter={dateRangeFilter}
-        setDateRangeFilter={setDateRangeFilter}
+        filters={filters}
+        availableAssets={availableAssets}
+        onChange={handleFilterChange}
+        onReset={handleReset}
       />
 
       {filteredTransactions.length === 0 ? (
@@ -79,9 +87,19 @@ export default function TransactionDashboard() {
           </div>
           <h3 className="text-xl font-semibold text-white mb-2">No Transactions Found</h3>
           <p className="text-gray-400 max-w-sm">
-            We couldn&apos;t find any transactions matching your current filters. Try adjusting
-            them or clear all filters.
+            {hasActiveFilters
+              ? "We couldn't find any transactions matching your current filters. Try adjusting them or clear all filters."
+              : "You don't have any transactions yet."}
           </p>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={handleReset}
+              className="mt-6 inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
       ) : (
         <div className={`space-y-3 relative ${loading ? 'opacity-60 pointer-events-none' : ''}`}>

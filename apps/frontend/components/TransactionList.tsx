@@ -163,7 +163,15 @@ function ExpandedRow({ tx, isExpanded, onToggle }: ExpandedRowProps) {
   );
 }
 
-export default function TransactionList({ transactions, isLoading }: { transactions: Transaction[]; isLoading?: boolean }) {
+export default function TransactionList({
+  transactions,
+  isLoading,
+  emptyMessage,
+}: {
+  transactions: Transaction[];
+  isLoading?: boolean;
+  emptyMessage?: string;
+}) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   if (isLoading) {
@@ -176,7 +184,9 @@ export default function TransactionList({ transactions, isLoading }: { transacti
     );
   }
 
-  if (!transactions.length) return <p className="text-gray-500 text-sm">No transactions yet.</p>;
+  if (!transactions.length) {
+    return <p className="text-gray-500 text-sm">{emptyMessage ?? 'No transactions yet.'}</p>;
+  }
 
   const toggleRow = (id: string) => {
     setExpandedId((prev) => (prev === id ? null : id));
